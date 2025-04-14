@@ -2,12 +2,12 @@
 import torch
 from transformers import LlamaModel, LlamaTokenizerFast
 
-def main():
+def test_embedding():
     model_id = "meta-llama/Llama-3.1-8B"
     model = LlamaModel.from_pretrained(model_id)
     tokenizer = LlamaTokenizerFast.from_pretrained(model_id)
 
-    text = "Example input"
+    text = "Capital of France is"
     # return_tensors="pt" gives a PyTorch tensor
     input_ids = tokenizer.encode(text, return_tensors="pt")
 
@@ -27,4 +27,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    test_embedding()

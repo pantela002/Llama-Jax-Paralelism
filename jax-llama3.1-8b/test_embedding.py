@@ -49,8 +49,8 @@ def main():
     tokenizer = LlamaTokenizerFast.from_pretrained(model_id)
     pretrained_weights = hf_model.get_input_embeddings().weight.data.cpu().numpy()
 
-    
-    text = "Example input"
+
+    text = "Capital of France is"
     # return_tensors="np" gives a NumPy array
     input_ids = tokenizer.encode(text, return_tensors="np").squeeze(0)
     input_ids_jax = jnp.array(input_ids)
