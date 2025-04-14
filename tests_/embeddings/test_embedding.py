@@ -67,7 +67,7 @@ def main():
     embeddings = llama_embedding_layer(input_ids_jax)  # shape: [seq_len, dim]
 
     # Save to text file
-    with open("embedding_output_jax.txt", "w") as f:
+    with open("tests_/embeddings/embedding_output_jax.txt", "w") as f:
         for token_emb in embeddings:
             line = " ".join(f"{val:.6f}" for val in token_emb.tolist())
             f.write(line + "\n")

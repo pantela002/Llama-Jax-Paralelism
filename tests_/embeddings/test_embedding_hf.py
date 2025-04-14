@@ -18,7 +18,7 @@ def test_embedding():
         embeddings_hf = model.get_input_embeddings()(input_ids).squeeze(0)  # [seq_len, dim]
 
     # Save to text file
-    with open("embedding_output_hf.txt", "w") as f:
+    with open("tests_/embeddings/embedding_output_hf.txt", "w") as f:
         for token_emb in embeddings_hf:
             line = " ".join(f"{val.item():.6f}" for val in token_emb)
             f.write(line + "\n")

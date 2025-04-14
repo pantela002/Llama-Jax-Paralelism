@@ -27,54 +27,47 @@ remat_policy = {
 
 class LlamaConfig:
     def __init__(self, **kwargs):
-        self.vocab_size = kwargs.get("vocab_size", 32000)
+        self.vocab_size = kwargs.get("vocab_size", 128256)
         self.hidden_size = kwargs.get("hidden_size", 4096)
-        self.intermediate_size = kwargs.get("intermediate_size", 11008)
+        self.intermediate_size = kwargs.get("intermediate_size", 14336)
         self.num_hidden_layers = kwargs.get("num_hidden_layers", 32)
         self.num_attention_heads = kwargs.get("num_attention_heads", 32)
-        self.num_key_value_heads = kwargs.get("num_key_value_heads", 32)
-        self.max_position_embeddings = kwargs.get(
-            "max_position_embeddings", 2048
-        )
-        self.rms_norm_eps = kwargs.get("rms_norm_eps", 1e-6)
-
-        # New attributes
-        self.rope_theta = kwargs.get("rope_theta", 10000.0)
-        self.attention_bias = kwargs.get("attention_bias", False)
+        self.num_key_value_heads = kwargs.get("num_key_value_heads", 8)
+        self.max_position_embeddings = kwargs.get("max_position_embeddings", 131072)
+        self.rms_norm_eps = kwargs.get("rms_norm_eps", 1e-5)
         self.hidden_act = kwargs.get("hidden_act", "silu")
+        self.attention_dropout = kwargs.get("attention_dropout", 0.0)
+        self.hidden_dropout = kwargs.get("hidden_dropout", 0.0)
         self.initializer_range = kwargs.get("initializer_range", 0.02)
         self.use_cache = kwargs.get("use_cache", True)
         self.tie_word_embeddings = kwargs.get("tie_word_embeddings", False)
-        self.rope_scaling = kwargs.get("rope_scaling", None)
-
-        # Derived attributes
-        self.head_dim = self.hidden_size // self.num_attention_heads
+        self.attention_bias = kwargs.get("attention_bias", False)
         self.pretraining_tp = kwargs.get("pretraining_tp", 1)
+        self.torch_dtype = kwargs.get("torch_dtype", "float32")
 
-        # Optional attributes
-        self.bias = kwargs.get(
-            "bias", False
-        )  # For compatibility with some attention implementations
-        self.rope_type = kwargs.get("rope_type", "default")
-        self.partial_rotary_factor = kwargs.get("partial_rotary_factor", 1.0)
-
-        # Dropout rates (usually 0.0 for inference)
-        self.attention_dropout = kwargs.get("attention_dropout", 0.0)
-        self.hidden_dropout = kwargs.get("hidden_dropout", 0.0)
-
-        # Additional optional parameters
-        self.bos_token_id = kwargs.get("bos_token_id", None)
-        self.eos_token_id = kwargs.get("eos_token_id", None)
+        self.bos_token_id = kwargs.get("bos_token_id", 128000)
+        self.eos_token_id = kwargs.get("eos_token_id", 128001)
         self.pad_token_id = kwargs.get("pad_token_id", None)
-        self.torch_dtype = kwargs.get("torch_dtype", None)
 
-        self.lora_rank = kwargs.get("lora_rank", 0)  # Default 0 means no LoRA
+        self.rope_theta = kwargs.get("rope_theta", 500000.0)
+        self.rope_scaling = kwargs.get("rope_scaling", {
+            "factor": 8.0,
+            "high_freq_factor": 4.0,
+            "low_freq_factor": 1.0,
+            "original_max_position_embeddings": 8192,
+            "rope_type": "llama3"
+        })
 
-        # Store dtype names as strings
+        self.head_dim = self.hidden_size // self.num_attention_heads
+        self.lora_rank = kwargs.get("lora_rank", 0)
         self._param_dtype = kwargs.get("param_dtype", "bfloat16")
         self._compute_dtype = kwargs.get("compute_dtype", "bfloat16")
-
         self.use_optimized_decoder = kwargs.get("use_optimized_decoder", True)
+
+        # Compatibility / experimental
+        self.bias = kwargs.get("bias", False)
+        self.rope_type = kwargs.get("rope_type", "llama3")
+        self.partial_rotary_factor = kwargs.get("partial_rotary_factor", 1.0)
 
     @property
     def param_dtype(self):
