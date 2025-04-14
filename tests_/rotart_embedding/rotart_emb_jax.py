@@ -166,14 +166,7 @@ class LlamaRotaryEmbedding(eqx.Module):
 import numpy as np
 import jax.numpy as jnp
 
-hf_cos = np.load("hf_cos.npy").astype(np.float32)
-hf_sin = np.load("hf_sin.npy").astype(np.float32)
-
-# Wrap with jax
-hf_cos = jnp.array(hf_cos)
-hf_sin = jnp.array(hf_sin)
-
-# Setup config same as HF
+# Same config
 config = LlamaConfig(
     hidden_size=4096,
     num_attention_heads=32,
@@ -181,25 +174,16 @@ config = LlamaConfig(
     rope_theta=500000.0,
 )
 
-# Create JAX rotary module
 rotary = LlamaRotaryEmbedding(config)
+position_ids = jnp.arange(6)[None, :]  # Shape: [1, 6]
+cos_jax, sin_jax = rotary(jnp.zeros((1, 6, 128)), position_ids)
 
-# Define dummy input: same shape used in HF export
-batch_size = 1
-seq_len = 6
-head_dim = 128
+# Load HF data
+hf_cos = jnp.array(np.load("tests_/rotart_embedding/hf_cos.npy"))
+hf_sin = jnp.array(np.load("tests_/rotart_embedding/hf_sin.npy"))
 
-dummy_input = jnp.zeros((batch_size, seq_len, head_dim))
-position_ids = jnp.arange(seq_len)[None, :]  # shape: [1, seq_len]
+# Check closeness
+print("Cos diff:", jnp.max(jnp.abs(hf_cos - cos_jax)))
+print("Sin diff:", jnp.max(jnp.abs(hf_sin - sin_jax)))
 
-# Call JAX rotary embedding
-cos_jax, sin_jax = rotary(dummy_input, position_ids)
 
-# Compare
-cos_diff = jnp.max(jnp.abs(hf_cos - cos_jax))
-sin_diff = jnp.max(jnp.abs(hf_sin - sin_jax))
-
-print(f"Cos diff: {cos_diff}")
-print(f"Sin diff: {sin_diff}")
-np.savetxt("tests_/rotart_embedding/jax_cos.txt", np.array(cos_jax).reshape(seq_len, -1), fmt="%.6f")
-np.savetxt("tests_/rotart_embedding/jax_sin.txt", np.array(sin_jax).reshape(seq_len, -1), fmt="%.6f")
