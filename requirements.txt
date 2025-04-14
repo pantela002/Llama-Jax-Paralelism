@@ -1,0 +1,9 @@
+transformers
+torch
+torchvision
+accelerate
+pillow
+qai-hub
+flax
+sentencepiece
+equinox
