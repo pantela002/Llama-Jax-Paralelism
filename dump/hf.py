@@ -1,6 +1,7 @@
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
+import numpy as np
 
 # Load the tokenizer and model
 model_id = "meta-llama/Llama-3.1-8B"
@@ -22,6 +23,8 @@ def output():
     inputs = tokenizer(prompt, return_tensors="pt")
     input_ids = inputs["input_ids"]
     attention_mask = inputs["attention_mask"]
+    np.save("hf_input_ids.npy", input_ids.numpy())
+    np.save("hf_attention_mask.npy", attention_mask.numpy())
 
     # Generate the next token
     with torch.no_grad():
@@ -40,4 +43,4 @@ def output():
     print("Next word prediction:", next_word)
 
 #output()
-print_model(model)
+output()

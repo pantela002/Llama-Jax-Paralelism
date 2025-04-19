@@ -7,3 +7,7 @@ qai-hub
 flax
 sentencepiece
 equinox
+tiktoken
+fairscale
+fire
+jax

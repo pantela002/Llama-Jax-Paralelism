@@ -1,0 +1,7 @@
+.cuda () 
+u model.py
+
+
+u jax_test.py 
+
+setup parralel
