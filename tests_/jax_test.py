@@ -29,10 +29,10 @@ import fire
 
 @dataclass
 class ModelArgs:
-    dim: int = 4096
+    dim: int = 64 #4096
     n_layers: int = 1
     n_heads: int = 32
-    vocab_size: int = 128256
+    vocab_size: int = 128 #128256
     n_kv_heads: Optional[int] = 8
     multiple_of: int = 256
     ffn_dim_multiplier: Optional[float] = None
@@ -43,12 +43,15 @@ class ModelArgs:
     max_seq_len: int = 64  # official max
 
     def transformers_config(self) -> config.LLaMAConfig:
-        intermediate_size = 14336  # ← taken directly from HF config
+        #intermediate_size = 14336  # ← taken directly from HF config
+        hidden_dim = int(2 * (4 * self.dim) / 3)
+        hidden_dim = self.multiple_of * ((hidden_dim + self.multiple_of - 1) // self.multiple_of)
 
         return config.LLaMAConfig(
             vocab_size=self.vocab_size,
             hidden_size=self.dim,
-            intermediate_size=intermediate_size,
+            #intermediate_size=intermediate_size,
+            intermediate_size=hidden_dim,
             num_hidden_layers=self.n_layers,
             num_attention_heads=self.n_heads,
             num_key_value_heads=self.n_kv_heads,
