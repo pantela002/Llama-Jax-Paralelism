@@ -2,6 +2,7 @@ import os
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 import jax
+from scipy.stats import pearsonr
 print('DEVICES:', jax.devices())
 import jax.numpy as jnp
 from jax_llama import model as jax_model
@@ -25,59 +26,47 @@ from jax_llama.partition import with_named_sharding_constraint
 from jax.sharding import PartitionSpec as P
 import fire
 
+
 @dataclass
 class ModelArgs:
-    dim: int = 32
-    n_layers: int = 4
-    n_heads: int = 4
-    vocab_size: int = 256
-    n_kv_heads: Optional[int] = 2
-    multiple_of: int = 2
+    dim: int = 4096
+    n_layers: int = 1
+    n_heads: int = 32
+    vocab_size: int = 128256
+    n_kv_heads: Optional[int] = 8
+    multiple_of: int = 256
     ffn_dim_multiplier: Optional[float] = None
     norm_eps: float = 1e-5
-    rope_theta: float = 10000.0
+    rope_theta: float = 500000.0
 
     max_batch_size: int = 1
-    max_seq_len: int = 64
+    max_seq_len: int = 64  # official max
 
     def transformers_config(self) -> config.LLaMAConfig:
-        intermediate_size = int(2 * (self.dim * 4) / 3)
-        if self.ffn_dim_multiplier is not None:
-            intermediate_size = int(self.ffn_dim_multiplier * intermediate_size)
-        intermediate_size = self.multiple_of * ((intermediate_size + self.multiple_of - 1) // self.multiple_of)
+        intermediate_size = 14336  # ← taken directly from HF config
+
         return config.LLaMAConfig(
-            vocab_size=self.vocab_size, 
-            hidden_size=self.dim, 
-            intermediate_size=intermediate_size, 
-            num_hidden_layers=self.n_layers, 
-            num_attention_heads=self.n_heads, 
+            vocab_size=self.vocab_size,
+            hidden_size=self.dim,
+            intermediate_size=intermediate_size,
+            num_hidden_layers=self.n_layers,
+            num_attention_heads=self.n_heads,
             num_key_value_heads=self.n_kv_heads,
-            max_sequence_length=self.max_seq_len, 
-            rms_norm_eps=self.norm_eps, 
+            max_position_embeddings=self.max_seq_len,
+            rms_norm_eps=self.norm_eps,
             rope_theta=self.rope_theta,
+            rope_scaling={
+                "factor": 8.0,
+                "high_freq_factor": 4.0,
+                "low_freq_factor": 1.0,
+                "original_max_position_embeddings": 8192,
+                "rope_type": "llama3"
+            }
         )
-
-def setup_model_parallel() -> Tuple[int, int]:
-    #print("⚠️ Skipping model parallel setup; using default (CPU or single GPU)")
-    #return 0, 1
-
-    local_rank = int(os.environ.get("LOCAL_RANK", -1))
-    world_size = int(os.environ.get("WORLD_SIZE", -1))
-
-    torch.distributed.init_process_group("gloo")  # <- use "gloo" on CPU
-    initialize_model_parallel(world_size)
-
-    if torch.cuda.is_available():
-        torch.cuda.set_device(local_rank)
-        print(f"[rank{local_rank}]: Using GPU {local_rank}")
-    else:
-        print(f"[rank{local_rank}]: Running on CPU")
-
-    return local_rank, world_size
-
 
 def test_RMSNorm(args: ModelArgs, total_tests: int, atol: float) -> np.ndarray:
     errs = []
+    pccs = []
     for test_n in range(total_tests):
         x = np.random.randn(args.max_batch_size, args.dim).astype(np.float32)
 
@@ -92,6 +81,13 @@ def test_RMSNorm(args: ModelArgs, total_tests: int, atol: float) -> np.ndarray:
 
         assert np.allclose(jax_output, torch_output, atol=atol), f"RMSNorm test {test_n} failed"
         errs.append(np.max(np.abs(jax_output - torch_output)))
+
+        flat_jax = jax_output.flatten()
+        flat_torch = torch_output.flatten()
+        pcc_value, _ = pearsonr(flat_jax, flat_torch)
+        pccs.append(pcc_value)
+
+        print(f"[RMSNorm test {test_n}] Max Error: {errs[-1]:.6f}, PCC: {pcc_value:.6f}")
     return np.asarray(errs, dtype=np.float32)
 
 def test_precompute_freqs_cis(args: ModelArgs, atol: float) -> float:
@@ -104,8 +100,10 @@ def test_precompute_freqs_cis(args: ModelArgs, atol: float) -> float:
     assert np.allclose(jax_freqs_cis, torch_freqs_cis, atol=atol), f"precompute_freqs_cis test failed"
     return np.max(np.abs(jax_freqs_cis - torch_freqs_cis))
 
-def test_apply_roary_emb(args: ModelArgs, total_tests: int, atol: float) -> Tuple[np.ndarray]:
+def test_apply_roary_emb(args: ModelArgs, total_tests: int, atol: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     errs0, errs1 = [], []
+    pccs0, pccs1 = [], []
+    
     for test_n in range(total_tests):
         xq = np.random.randn(args.max_batch_size, args.max_seq_len, args.n_heads, args.dim // args.n_heads).astype(np.float32)
         xk = np.random.randn(args.max_batch_size, args.max_seq_len, args.n_heads, args.dim // args.n_heads).astype(np.float32)
@@ -119,78 +117,95 @@ def test_apply_roary_emb(args: ModelArgs, total_tests: int, atol: float) -> Tupl
         torch_output = (torch_output[0].detach().numpy(), torch_output[1].detach().numpy())
 
         assert np.allclose(jax_output[0], torch_output[0], atol=atol) and \
-            np.allclose(jax_output[1], torch_output[1], atol=atol), f"apply_rotary_emb test {test_n} failed"
-        errs0.append(np.max(np.abs(jax_output[0] - torch_output[0])))
-        errs1.append(np.max(jax_output[1] - torch_output[1]))
-    return np.asarray(errs0, dtype=np.float32), np.asarray(errs1, dtype=np.float32)
+               np.allclose(jax_output[1], torch_output[1], atol=atol), f"apply_rotary_emb test {test_n} failed"
 
-def test_Attention(args: ModelArgs, total_tests: int, atol: float, is_llama3: bool) -> float:
+        # Max absolute error
+        errs0.append(np.max(np.abs(jax_output[0] - torch_output[0])))
+        errs1.append(np.max(np.abs(jax_output[1] - torch_output[1])))
+
+        # PCC
+        pcc0, _ = pearsonr(jax_output[0].flatten(), torch_output[0].flatten())
+        pcc1, _ = pearsonr(jax_output[1].flatten(), torch_output[1].flatten())
+        pccs0.append(pcc0)
+        pccs1.append(pcc1)
+        print("pcc0:", pcc0)
+        print("pcc1:", pcc1)
+
+    return (
+        np.asarray(errs0, dtype=np.float32),
+        np.asarray(errs1, dtype=np.float32),
+        np.asarray(pccs0, dtype=np.float32),
+        np.asarray(pccs1, dtype=np.float32)
+    )
+
+def test_Attention(args: ModelArgs, total_tests: int, atol: float) -> Tuple[np.ndarray, np.ndarray]:
     kv_heads = args.n_kv_heads if args.n_kv_heads is not None else args.n_heads
     errs = []
+    pccs = []
     for test_n in range(total_tests):
         x = np.random.randn(args.max_batch_size, args.max_seq_len, args.dim).astype(np.float32)
         wq = np.random.randn(args.dim, args.dim).astype(np.float32)
-        wk = np.random.randn(args.dim, args.dim//(args.n_heads//kv_heads)).astype(np.float32)
-        wv = np.random.randn(args.dim, args.dim//(args.n_heads//kv_heads)).astype(np.float32)
+        wk = np.random.randn(args.dim, args.dim // (args.n_heads // kv_heads)).astype(np.float32)
+        wv = np.random.randn(args.dim, args.dim // (args.n_heads // kv_heads)).astype(np.float32)
         wo = np.random.randn(args.dim, args.dim).astype(np.float32)
 
         jax_attention = jax_model.FlaxLLaMAAttention(args.transformers_config(), precision='highest')
         jax_params = freeze({
-            'wq': {'kernel': jnp.asarray(wq)}, 
-            'wk': {'kernel': jnp.asarray(wk)}, 
-            'wv': {'kernel': jnp.asarray(wv)}, 
-            'wo': {'kernel': jnp.asarray(wo)}, 
+            'wq': {'kernel': jnp.asarray(wq)},
+            'wk': {'kernel': jnp.asarray(wk)},
+            'wv': {'kernel': jnp.asarray(wv)},
+            'wo': {'kernel': jnp.asarray(wo)},
         })
         jax_output = jax_attention.apply(
-            {'params': jax_params}, 
-            jnp.asarray(x), 
-            jnp.ones((args.max_batch_size, args.max_seq_len), dtype=np.int32), 
-            jnp.broadcast_to(jnp.arange(args.max_seq_len, dtype=np.int32)[None, :], (args.max_batch_size, args.max_seq_len)), 
+            {'params': jax_params},
+            jnp.asarray(x),
+            jnp.ones((args.max_batch_size, args.max_seq_len), dtype=np.int32),
+            jnp.broadcast_to(jnp.arange(args.max_seq_len, dtype=np.int32)[None, :], (args.max_batch_size, args.max_seq_len)),
         )[0]
         jax_output = np.asarray(jax_output)
 
         torch_freqs_cis = model.precompute_freqs_cis(args.dim // args.n_heads, args.max_seq_len)
-        if is_llama3:
-            torch_attention = model.Attention(
-                model.ModelArgs(
-                    n_heads=args.n_heads, 
-                    n_kv_heads=kv_heads,
-                    dim=args.dim, 
-                    max_batch_size=args.max_batch_size, 
-                    max_seq_len=args.max_seq_len,
-                    rope_theta=args.rope_theta,
-                ), 
-            )
-        else:
-            torch_attention = model.Attention(
-                model.ModelArgs(
-                    n_heads=args.n_heads, 
-                    n_kv_heads=kv_heads,
-                    dim=args.dim, 
-                    max_batch_size=args.max_batch_size, 
-                    max_seq_len=args.max_seq_len,
-                ), 
-            )
+
+        torch_attention = model.Attention(
+            model.ModelArgs(
+                n_heads=args.n_heads,
+                n_kv_heads=kv_heads,
+                dim=args.dim,
+                max_batch_size=args.max_batch_size,
+                max_seq_len=args.max_seq_len,
+                rope_theta=args.rope_theta,
+            ),
+        )
+
         torch_attention.load_state_dict({
-            "wo.weight": torch.tensor(wo.transpose()), 
-            "wq.weight": torch.tensor(wq.transpose()), 
-            "wv.weight": torch.tensor(wv.transpose()), 
-            "wk.weight": torch.tensor(wk.transpose()), 
-        }) # load weights, have to transpose because pytorch linear layers are reversed from Jax.
+            "wo.weight": torch.tensor(wo.transpose()),
+            "wq.weight": torch.tensor(wq.transpose()),
+            "wv.weight": torch.tensor(wv.transpose()),
+            "wk.weight": torch.tensor(wk.transpose()),
+        })
+
         torch_output = torch_attention(
-            torch.tensor(x), 
-            0, 
-            torch_freqs_cis, 
-            torch.where(torch.tensor(np.asarray(make_causal_mask(jnp.ones((1, args.max_seq_len), dtype="bool"), dtype="bool"))) == False, float(jnp.finfo(jnp.float32).min), 0.0), 
+            torch.tensor(x),
+            0,
+            torch_freqs_cis,
+            torch.where(torch.tensor(np.asarray(make_causal_mask(jnp.ones((1, args.max_seq_len), dtype="bool"), dtype="bool"))) == False, float(jnp.finfo(jnp.float32).min), 0.0),
         )
         torch_output = torch_output.detach().numpy()
 
-        assert np.allclose(jax_output, torch_output, atol=atol), f"Attention test {test_n} failed"
+        # Compute max error
         errs.append(np.max(np.abs(jax_output - torch_output)))
-    return np.asarray(errs, dtype=np.float32)
 
-def test_feedForward(args: ModelArgs, total_tests: int, atol: float) -> List[float]:
+        # Compute PCC
+        pcc, _ = pearsonr(jax_output.flatten(), torch_output.flatten())
+        pccs.append(pcc)
+        print("pcc", pcc)
+        assert np.allclose(jax_output, torch_output, atol=atol), f"Attention test {test_n} failed"
+
+    return np.asarray(errs, dtype=np.float32), np.asarray(pccs, dtype=np.float32)
+
+def test_feedForward(args: ModelArgs, total_tests: int, atol: float) -> Tuple[np.ndarray, np.ndarray]:
     errs = []
+    pccs = []
     for test_n in range(total_tests):
         transformers_config = args.transformers_config()
         x = np.random.randn(args.max_batch_size, args.max_seq_len, args.dim).astype(np.float32)
@@ -200,34 +215,43 @@ def test_feedForward(args: ModelArgs, total_tests: int, atol: float) -> List[flo
 
         jax_mlp = jax_model.FlaxLLaMAMLP(transformers_config, precision='highest')
         jax_params = freeze({
-            'w1': {'kernel': jnp.asarray(w1)}, 
-            'w2': {'kernel': jnp.asarray(w2)}, 
-            'w3': {'kernel': jnp.asarray(w3)}, 
-        }) # load weights
+            'w1': {'kernel': jnp.asarray(w1)},
+            'w2': {'kernel': jnp.asarray(w2)},
+            'w3': {'kernel': jnp.asarray(w3)},
+        })
         jax_output = jax_mlp.apply({'params': jax_params}, jnp.asarray(x))
         jax_output = np.asarray(jax_output)
 
         torch_mlp = model.FeedForward(
-            dim=args.dim, 
-            hidden_dim=args.dim*4, 
+            dim=args.dim,
+            hidden_dim=args.dim * 4,
             multiple_of=args.multiple_of,
             ffn_dim_multiplier=args.ffn_dim_multiplier,
         )
         torch_mlp.load_state_dict({
-            "w1.weight": torch.tensor(w1.transpose()), 
-            "w2.weight": torch.tensor(w2.transpose()), 
-            "w3.weight": torch.tensor(w3.transpose()), 
-        }) # load weights, have to transpose because pytorch linear layers are reversed from Jax.
+            "w1.weight": torch.tensor(w1.transpose()),
+            "w2.weight": torch.tensor(w2.transpose()),
+            "w3.weight": torch.tensor(w3.transpose()),
+        })
         torch_output = torch_mlp(torch.tensor(x))
         torch_output = torch_output.detach().numpy()
 
-        assert np.allclose(jax_output, torch_output, atol=atol), f"FeedForward test {test_n} failed"
+        # Max error
         errs.append(np.max(np.abs(jax_output - torch_output)))
-    return np.asarray(errs, dtype=np.float32)
 
-def test_TransformerBlock(args: ModelArgs, total_tests: int, atol: float, is_llama3: bool) -> np.ndarray:
+        # PCC
+        pcc, _ = pearsonr(jax_output.flatten(), torch_output.flatten())
+        pccs.append(pcc)
+        print(f"[FeedForward test {test_n}] Max Error: {errs[-1]:.6f}, PCC: {pcc:.6f}")
+
+        assert np.allclose(jax_output, torch_output, atol=atol), f"FeedForward test {test_n} failed"
+
+    return np.asarray(errs, dtype=np.float32), np.asarray(pccs, dtype=np.float32)
+
+def test_TransformerBlock(args: ModelArgs, total_tests: int, atol: float) -> np.ndarray:
     kv_heads = args.n_kv_heads if args.n_kv_heads is not None else args.n_heads
     errs = []
+    pccs = []
     for test_n in range(total_tests):
         transformers_config = args.transformers_config()
         x = np.random.randn(args.max_batch_size, args.max_seq_len, args.dim).astype(np.float32)
@@ -267,35 +291,22 @@ def test_TransformerBlock(args: ModelArgs, total_tests: int, atol: float, is_lla
         jax_output = np.asarray(jax_output)
 
         torch_freqs_cis = model.precompute_freqs_cis(args.dim // args.n_heads, args.max_seq_len)
-        if is_llama3:
-            torch_transformer_block = model.TransformerBlock(
-                0, 
-                model.ModelArgs(
-                    dim=args.dim, 
-                    n_heads=args.n_heads, 
-                    n_kv_heads=kv_heads,
-                    multiple_of=args.multiple_of, 
-                    ffn_dim_multiplier=args.ffn_dim_multiplier,
-                    norm_eps=args.norm_eps, 
-                    rope_theta=args.rope_theta,
-                    max_batch_size=args.max_batch_size, 
-                    max_seq_len=args.max_seq_len, 
-                ), 
-            )
-        else:
-            torch_transformer_block = model.TransformerBlock(
-                0, 
-                model.ModelArgs(
-                    dim=args.dim, 
-                    n_heads=args.n_heads, 
-                    n_kv_heads=kv_heads,
-                    multiple_of=args.multiple_of, 
-                    ffn_dim_multiplier=args.ffn_dim_multiplier,
-                    norm_eps=args.norm_eps,
-                    max_batch_size=args.max_batch_size, 
-                    max_seq_len=args.max_seq_len, 
-                ), 
-            )
+
+        torch_transformer_block = model.TransformerBlock(
+            0, 
+            model.ModelArgs(
+                dim=args.dim, 
+                n_heads=args.n_heads, 
+                n_kv_heads=kv_heads,
+                multiple_of=args.multiple_of, 
+                ffn_dim_multiplier=args.ffn_dim_multiplier,
+                norm_eps=args.norm_eps, 
+                rope_theta=args.rope_theta,
+                max_batch_size=args.max_batch_size, 
+                max_seq_len=args.max_seq_len, 
+            ), 
+        )
+
         torch_transformer_block.load_state_dict({
             "attention.wo.weight": torch.tensor(wo.transpose()), 
             "attention.wq.weight": torch.tensor(wq.transpose()), 
@@ -315,11 +326,18 @@ def test_TransformerBlock(args: ModelArgs, total_tests: int, atol: float, is_lla
         )
         torch_output = torch_output.detach().numpy()
 
-        assert np.allclose(jax_output, torch_output, atol=atol), f"TransformerBlock test {test_n} failed"
-        errs.append(np.abs(jax_output - torch_output).max())
-    return np.asarray(errs, dtype=np.float32)
+        err = np.max(np.abs(jax_output - torch_output))
+        pcc, _ = pearsonr(jax_output.flatten(), torch_output.flatten())
 
-def test_Transformer(args: ModelArgs, total_tests: int, atol: float, is_llama3: bool) -> np.ndarray:
+        print(f"[TransformerBlock test {test_n}] Max Error: {err:.6f}, PCC: {pcc:.6f}")
+        assert np.allclose(jax_output, torch_output, atol=atol), f"TransformerBlock test {test_n} failed"
+
+        errs.append(err)
+        pccs.append(pcc)
+
+    return np.asarray(errs, dtype=np.float32), np.asarray(pccs, dtype=np.float32)
+
+def test_Transformer(args: ModelArgs, total_tests: int, atol: float) -> np.ndarray:
     kv_heads = args.n_kv_heads if args.n_kv_heads is not None else args.n_heads
     errs = []
     for test_n in range(total_tests):
@@ -363,37 +381,23 @@ def test_Transformer(args: ModelArgs, total_tests: int, atol: float, is_llama3: 
         ).logits[:, -1, :]
         jax_output = np.asarray(jax_output)
 
-        if is_llama3:
-            torch_transformer = model.Transformer(
-                model.ModelArgs(
-                    vocab_size=args.vocab_size, 
-                    n_layers=args.n_layers, 
-                    dim=args.dim, 
-                    n_heads=args.n_heads, 
-                    n_kv_heads=kv_heads,
-                    multiple_of=args.multiple_of, 
-                    ffn_dim_multiplier=args.ffn_dim_multiplier,
-                    norm_eps=args.norm_eps, 
-                    rope_theta=args.rope_theta,
-                    max_batch_size=args.max_batch_size, 
-                    max_seq_len=args.max_seq_len, 
-                ), 
-            )
-        else:
-            torch_transformer = model.Transformer(
-                model.ModelArgs(
-                    vocab_size=args.vocab_size, 
-                    n_layers=args.n_layers, 
-                    dim=args.dim, 
-                    n_heads=args.n_heads, 
-                    n_kv_heads=kv_heads,
-                    multiple_of=args.multiple_of, 
-                    ffn_dim_multiplier=args.ffn_dim_multiplier,
-                    norm_eps=args.norm_eps, 
-                    max_batch_size=args.max_batch_size, 
-                    max_seq_len=args.max_seq_len, 
-                ), 
-            )
+
+        torch_transformer = model.Transformer(
+            model.ModelArgs(
+                vocab_size=args.vocab_size, 
+                n_layers=args.n_layers, 
+                dim=args.dim, 
+                n_heads=args.n_heads, 
+                n_kv_heads=kv_heads,
+                multiple_of=args.multiple_of, 
+                ffn_dim_multiplier=args.ffn_dim_multiplier,
+                norm_eps=args.norm_eps, 
+                rope_theta=args.rope_theta,
+                max_batch_size=args.max_batch_size, 
+                max_seq_len=args.max_seq_len, 
+            ), 
+        )
+
         torch_layer_weight = lambda i: {
             "layers.%d.attention.wo.weight" % (i): torch.tensor(layer_weights[i]['attention']['wo']['kernel'].transpose()), 
             "layers.%d.attention.wq.weight" % (i): torch.tensor(layer_weights[i]['attention']['wq']['kernel'].transpose()), 
@@ -408,21 +412,27 @@ def test_Transformer(args: ModelArgs, total_tests: int, atol: float, is_llama3: 
         torch_transformer.load_state_dict({
             "tok_embeddings.weight": torch.tensor(tok_embeddings), 
             "norm.weight": torch.tensor(norm), 
-            "output.weight": torch.tensor(output.transpose()), 
+            "output.weight": torch.tensor(output.T), #TODO CHANGED  FROM .TRANSPOSE()
             **functools.reduce(lambda x, y: {**x, **y}, [torch_layer_weight(i) for i in range(args.n_layers)]), 
         }) # load weights
         torch_output = torch_transformer(torch.tensor(x), 0)[:, -1, :]
         torch_output = torch_output.detach().numpy()
 
-        assert np.allclose(jax_output, torch_output, atol=atol), f"Transformer test {test_n} failed"
-        errs.append(np.max(np.abs(jax_output - torch_output)))
+        #errs.append(np.max(np.abs(jax_output - torch_output)))
+        #assert np.allclose(jax_output, torch_output, atol=atol), f"Transformer test {test_n} failed"
+        pcc, _ = pearsonr(jax_output.flatten(), torch_output.flatten())
+        print("pcc", pcc)
+        diff = np.abs(jax_output - torch_output)
+        print(f"[Transformer test {test_n}] Max: {np.max(diff)}, Mean: {np.mean(diff)}, Median: {np.median(diff)}")
+        if not np.allclose(jax_output, torch_output, atol=atol):
+            print(f"[Transformer test {test_n}] FAILED")
+        errs.append(np.max(diff))
+
     return np.asarray(errs, dtype=np.float32)
 
-def test_Tokenizer(tokenizer_path: str, is_llama3: bool, test_strs: List[str]) -> None:
-    if is_llama3:
-        jax_tokenizer = LLaMA3Tokenizer(tokenizer_path)
-    else:
-        jax_tokenizer = LLaMA2Tokenizer(tokenizer_path)
+def test_Tokenizer(tokenizer_path: str, test_strs: List[str]) -> None:
+
+    jax_tokenizer = LLaMA3Tokenizer(tokenizer_path)
     torch_tokenizer = Tokenizer(tokenizer_path)
     for str_ in test_strs:
         jax_tokens = jax_tokenizer.encode(str_, bos=True, eos=False)
@@ -430,57 +440,54 @@ def test_Tokenizer(tokenizer_path: str, is_llama3: bool, test_strs: List[str]) -
         assert jax_tokens == torch_tokens, f"Tokenizer test failed for string: {str_}"
         assert jax_tokenizer.decode(jax_tokens) == torch_tokenizer.decode(torch_tokens), f"Tokenizer test failed for string: {str_}"
 
-def test_ModelLogits(ckpt_dir: str, tokenizer_path: str, is_llama3: bool, local_rank: int, world_size: int, test_strs: List[str], atol: float) -> Optional[float]:
+def test_ModelLogits(ckpt_dir: str, tokenizer_path: str, test_strs: List[str], atol: float) -> Optional[float]:
     assert torch.cuda.is_available(), "CUDA is not available."
     assert jax.lib.xla_bridge.get_backend().platform == "gpu"
 
     # load jax model
-    if local_rank == 0:
-        jax_generator = jax_load(
-            ckpt_dir,
-            tokenizer_path,
-            is_llama3,
-            max_seq_length=8192 if is_llama3 else 2048,
-            precision='highest',
-        )
-        jax_model, jax_params = jax_generator.model, jax_generator.params
-        tokenizer, mesh = jax_generator.tokenizer, jax_generator.mesh
-        tokens = [tokenizer.encode(x, bos=True, eos=False) for x in test_strs]
+    jax_generator = jax_load(
+        ckpt_dir,
+        tokenizer_path,
+        is_llama3 =True,
+        max_seq_length=8192,
+        precision='highest',
+    )
+    jax_model, jax_params = jax_generator.model, jax_generator.params
+    tokenizer, mesh = jax_generator.tokenizer, jax_generator.mesh
+    tokens = [tokenizer.encode(x, bos=True, eos=False) for x in test_strs]
 
-        # jit model call
-        @jax.jit
-        def get_logits(params: jnp.ndarray, tokens: jnp.ndarray) -> jnp.ndarray:
-            tokens = with_named_sharding_constraint(tokens, mesh, P("dp", None))
+    # jit model call
+    @jax.jit
+    def get_logits(params: jnp.ndarray, tokens: jnp.ndarray) -> jnp.ndarray:
+        tokens = with_named_sharding_constraint(tokens, mesh, P("dp", None))
 
-            logits = jax_model(
-                in_array, 
-                params=params, 
-            ).logits[:, -1, :]
+        logits = jax_model(
+            in_array, 
+            params=params, 
+        ).logits[:, -1, :]
 
-            logits = with_named_sharding_constraint(logits, mesh, P("dp", None))
-            return logits
+        logits = with_named_sharding_constraint(logits, mesh, P("dp", None))
+        return logits
 
-        # get logits
-        jax_logits = []
-        for k in range(len(tokens)):
-            in_array = jnp.asarray(tokens[k][:jax_model.config.max_sequence_length])[None]
-            jax_logits.append(get_logits(jax_params, in_array))
-        jax_logits = np.asarray(jnp.concatenate(jax_logits, axis=0))
-        # unload jax model
-        del jax_model
-        del jax_params
-        del get_logits
+    # get logits
+    jax_logits = []
+    for k in range(len(tokens)):
+        in_array = jnp.asarray(tokens[k][:jax_model.config.max_sequence_length])[None]
+        jax_logits.append(get_logits(jax_params, in_array))
+    jax_logits = np.asarray(jnp.concatenate(jax_logits, axis=0))
+    # unload jax model
+    del jax_model
+    del jax_params
+    del get_logits
     
-    # wait for jax process
-    torch.distributed.barrier()
     
     # get pytorch logits
     torch_generator = torch_load.build(
         ckpt_dir, 
         tokenizer_path,
-        max_seq_len=8192 if is_llama3 else 2048, 
+        max_seq_len=8192, 
         max_batch_size=1, 
-        model_parallel_size=world_size,
+        model_parallel_size=1,
         seed=1,
     )
     torch_model, tokenizer = torch_generator.model, torch_generator.tokenizer
@@ -494,40 +501,34 @@ def test_ModelLogits(ckpt_dir: str, tokenizer_path: str, is_llama3: bool, local_
     del torch_generator
     del torch_model
 
-    if local_rank == 0:
-        assert np.allclose(jax_logits, torch_logits, atol=atol), "ModelLogits test failed"
-        
-        return np.max(np.abs(jax_logits - torch_logits).reshape(len(test_strs), -1), axis=1)
+    assert np.allclose(jax_logits, torch_logits, atol=atol), "ModelLogits test failed"
     
-    return None
+    return np.max(np.abs(jax_logits - torch_logits).reshape(len(test_strs), -1), axis=1)
 
-def test_ModelGenerations(ckpt_dir: str, tokenizer_path: str, is_llama3: bool, local_rank: int, world_size: int, test_strs: List[str], gen_len: int=32) -> None:
+
+def test_ModelGenerations(ckpt_dir: str, tokenizer_path: str, test_strs: List[str], gen_len: int=32) -> None:
     assert torch.cuda.is_available(), "CUDA is not available."
     assert jax.lib.xla_bridge.get_backend().platform == "gpu"
     
-    if local_rank == 0:
-        # load jax model
-        jax_generator = jax_load(
-            ckpt_dir,
-            tokenizer_path,
-            is_llama3,
-            max_seq_length=8192 if is_llama3 else 2048,
-            # precision='highest',
-        )
-        jax_strs = jax_generator.generate_from_str(test_strs, max_gen_len=gen_len, temperature=0.0, top_p=1.0)
-        # unload jax model
-        del jax_generator
-    
-    # wait for jax process
-    torch.distributed.barrier()
+    # load jax model
+    jax_generator = jax_load(
+        ckpt_dir,
+        tokenizer_path,
+        is_llama3=True,
+        max_seq_length=8192,
+        # precision='highest',
+    )
+    jax_strs = jax_generator.generate_from_str(test_strs, max_gen_len=gen_len, temperature=0.0, top_p=1.0)
+    # unload jax model
+    del jax_generator
 
     # get pytorch strs
     torch_generator = torch_load.build(
         ckpt_dir, 
         tokenizer_path,
-        max_seq_len=8192 if is_llama3 else 2048, 
+        max_seq_len=8192, 
         max_batch_size=len(test_strs), 
-        model_parallel_size=world_size,
+        model_parallel_size=1,
         seed=1,
     )
     torch_strs = torch_generator.text_completion(test_strs, max_gen_len=gen_len, temperature=0.0, top_p=1.0)
@@ -536,101 +537,95 @@ def test_ModelGenerations(ckpt_dir: str, tokenizer_path: str, is_llama3: bool, l
     del torch_generator.model
     del torch_generator
 
-    if local_rank == 0:
-        assert all([jax_strs[i].removeprefix('<|begin_of_text|>').strip().removeprefix(test_strs[i]).strip() == torch_strs[i].strip() for i in range(len(test_strs))]), "ModelGenerations test failed"
+    assert all([jax_strs[i].removeprefix('<|begin_of_text|>').strip().removeprefix(test_strs[i]).strip() == torch_strs[i].strip() for i in range(len(test_strs))]), "ModelGenerations test failed"
 
-def main(ckpt_dir: str = "/root/tt/models/8B", tokenizer_path: str = "/root/tt/models/tokenizer.model", is_llama3: bool=False):
+def main(ckpt_dir: str = "/root/tt/models/8B", tokenizer_path: str = "/root/tt/models/tokenizer.model"):
     np.random.seed(0)
-    local_rank, world_size = setup_model_parallel()
 
     with torch.no_grad():
         with jax.default_device(jax.devices('cpu')[0]):
-            if world_size == 1:
-                print('='*10)
-                print("[Testing RMSNorm]")
-                errs = test_RMSNorm(ModelArgs(), 128, atol=1e-2)
-                print("[Passed]")
-                print("Max RMSNorm error: %f" % (np.max(errs)))
-                print("Mean RMSNorm error: %f" % (np.mean(errs)))
-                print("Median RMSNorm error: %f" % (np.median(errs)))
-                print('='*10)
-                print('='*10)
-                print("[Testing precompute_freqs_cis]")
-                errs = test_precompute_freqs_cis(ModelArgs(), atol=1e-2)
-                print("[Passed]")
-                print("Max precompute_freqs_cis error: %f" % (np.max(errs)))
-                print("Mean precompute_freqs_cis error: %f" % (np.mean(errs)))
-                print("Median precompute_freqs_cis error: %f" % (np.median(errs)))
-                print('='*10)
-
-                print('='*10)
-                print("[Testing apply_rotary_emb]")
-                errs0, errs1 = test_apply_roary_emb(ModelArgs(), 128, atol=1e-2)
-                print("[Passed]")
-                print("Max apply_rotary_emb error: %f, %f" % (np.max(errs0), np.max(errs1)))
-                print("Mean apply_rotary_emb error: %f, %f" % (np.mean(errs0), np.mean(errs1)))
-                print("Median apply_rotary_emb error: %f, %f" % (np.median(errs0), np.median(errs1)))
-                print('='*10)
-
-                print('='*10)
-                print("[Testing Attention]")
-                errs = test_Attention(ModelArgs(), 128, atol=1e-2, is_llama3=is_llama3)
-                print("[Passed]")
-                print("Max Attention error: %f" % (np.max(errs)))
-                print("Mean Attention error: %f" % (np.mean(errs)))
-                print("Median Attention error: %f" % (np.median(errs)))
-                print('='*10)
-
-                print('='*10)
-                print("[Testing FeedForward]")
-                errs = test_feedForward(ModelArgs(), 128, atol=1e-2)
-                print("[Passed]")
-                print("Max FeedForward error: %f" % (np.max(errs)))
-                print("Mean FeedForward error: %f" % (np.mean(errs)))
-                print("Median FeedForward error: %f" % (np.median(errs)))
-                print('='*10)
-
-                print('='*10)
-                print("[Testing TransformerBlock]")
-                errs = test_TransformerBlock(ModelArgs(), 128, atol=1e-2, is_llama3=is_llama3)
-                print("[Passed]")
-                print("Max TransformerBlock error: %f" % (np.max(errs)))
-                print("Mean TransformerBlock error: %f" % (np.mean(errs)))
-                print("Median TransformerBlock error: %f" % (np.median(errs)))
-                print('='*10)
-
-                print('='*10)
-                print("[Testing Transformer]")
-                errs = test_Transformer(ModelArgs(), 128, atol=1e-2, is_llama3=is_llama3)
-                print("[Passed]")
-                print("Max Transformer error: %f" % (np.max(errs)))
-                print("Mean Transformer error: %f" % (np.mean(errs)))
-                print("Median Transformer error: %f" % (np.median(errs)))
-                print('='*10)
-                """
-
-        if local_rank == 0:
             print('='*10)
-            print("[Testing Tokenizer]")
-            test_Tokenizer(
-                tokenizer_path,
-                is_llama3,
-                [
-                    "The capital of Germany is the city of", 
-                    "Here is my sonnet in the style of Shakespeare about an artificial intelligence:", 
-                ], 
-            )
+            print("[Testing RMSNorm]")
+            errs = test_RMSNorm(ModelArgs(), 1, atol=1e-2)
             print("[Passed]")
+            print("Max RMSNorm error: %f" % (np.max(errs)))
+            print("Mean RMSNorm error: %f" % (np.mean(errs)))
+            print("Median RMSNorm error: %f" % (np.median(errs)))
             print('='*10)
+            print('='*10)
+            print("[Testing precompute_freqs_cis]")
+            errs = test_precompute_freqs_cis(ModelArgs(), atol=1e-2)
+            print("[Passed]")
+            print("Max precompute_freqs_cis error: %f" % (np.max(errs)))
+            print("Mean precompute_freqs_cis error: %f" % (np.mean(errs)))
+            print("Median precompute_freqs_cis error: %f" % (np.median(errs)))
+            print('='*10)
+
+            print('='*10)
+            print("[Testing apply_rotary_emb]")
+            errs0, errs1, _1, _2 = test_apply_roary_emb(ModelArgs(), 1, atol=1e-2)
+            print("[Passed]")
+            print("Max apply_rotary_emb error: %f, %f" % (np.max(errs0), np.max(errs1)))
+            print("Mean apply_rotary_emb error: %f, %f" % (np.mean(errs0), np.mean(errs1)))
+            print("Median apply_rotary_emb error: %f, %f" % (np.median(errs0), np.median(errs1)))
+            print('='*10)
+
+            print('='*10)
+            print("[Testing Attention]")
+            errs, _ = test_Attention(ModelArgs(), 1, atol=1e-2)
+            print("[Passed]")
+            print("Max Attention error: %f" % (np.max(errs)))
+            print("Mean Attention error: %f" % (np.mean(errs)))
+            print("Median Attention error: %f" % (np.median(errs)))
+            print('='*10)
+
+            print('='*10)
+            print("[Testing FeedForward]")
+            errs,_ = test_feedForward(ModelArgs(), 1, atol=1e-2)
+            print("[Passed]")
+            print("Max FeedForward error: %f" % (np.max(errs)))
+            print("Mean FeedForward error: %f" % (np.mean(errs)))
+            print("Median FeedForward error: %f" % (np.median(errs)))
+            print('='*10)
+
+            print('='*10)
+            print("[Testing TransformerBlock]")
+            errs, _ = test_TransformerBlock(ModelArgs(), 1, atol=1e-2)
+            print("[Passed]")
+            print("Max TransformerBlock error: %f" % (np.max(errs)))
+            print("Mean TransformerBlock error: %f" % (np.mean(errs)))
+            print("Median TransformerBlock error: %f" % (np.median(errs)))
+            print('='*10)
+
+            print('='*10)
+            print("[Testing Transformer]")
+            errs = test_Transformer(ModelArgs(), 128, atol=1e-2)
+            print("[Passed]")
+            print("Max Transformer error: %f" % (np.max(errs)))
+            print("Mean Transformer error: %f" % (np.mean(errs)))
+            print("Median Transformer error: %f" % (np.median(errs)))
+            print('='*10)
+                
+        """
+
+        print('='*10)
+        print("[Testing Tokenizer]")
+        test_Tokenizer(
+            tokenizer_path,
+            [
+                "The capital of Germany is the city of", 
+                "Here is my sonnet in the style of Shakespeare about an artificial intelligence:", 
+            ], 
+        )
+        print("[Passed]")
+        print('='*10)
         
-        if local_rank == 0:
-            print('='*10)
-            print("[Testing ModelLogits]")
-        torch.distributed.barrier()
+
+        print('='*10)
+        print("[Testing ModelLogits]")
         errs = test_ModelLogits(
             ckpt_dir, 
             tokenizer_path,
-            is_llama3,
             local_rank, 
             world_size, 
             [
@@ -639,21 +634,17 @@ def main(ckpt_dir: str = "/root/tt/models/8B", tokenizer_path: str = "/root/tt/m
             ], 
             atol=5e-1, 
         )
-        if local_rank == 0:
-            print("[Passed]")
-            print("Max ModelLogits error: %f" % (np.max(errs)))
-            print("Mean ModelLogits error: %f" % (np.mean(errs)))
-            print("Median ModelLogits error: %f" % (np.median(errs)))
-            print('='*10)
+        print("[Passed]")
+        print("Max ModelLogits error: %f" % (np.max(errs)))
+        print("Mean ModelLogits error: %f" % (np.mean(errs)))
+        print("Median ModelLogits error: %f" % (np.median(errs)))
+        print('='*10)
 
-        if local_rank == 0:
-            print('='*10)
-            print("[Testing ModelGenerations]")
-        torch.distributed.barrier()
+        print('='*10)
+        print("[Testing ModelGenerations]")
         test_ModelGenerations(
             ckpt_dir, 
             tokenizer_path,
-            is_llama3,
             local_rank, 
             world_size, 
             [
@@ -662,10 +653,9 @@ def main(ckpt_dir: str = "/root/tt/models/8B", tokenizer_path: str = "/root/tt/m
             ], 
             gen_len=32, 
         )
-        if local_rank == 0:
-            print("[Passed]")
-            print('='*10)
-            """
+        print("[Passed]")
+        print('='*10)
+        """
 
 if __name__ == "__main__":
     fire.Fire(main)

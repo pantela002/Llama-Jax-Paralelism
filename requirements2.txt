@@ -1,0 +1,6 @@
+fire
+sentencepiece
+jax
+flax
+jaxtyping
+transformers
