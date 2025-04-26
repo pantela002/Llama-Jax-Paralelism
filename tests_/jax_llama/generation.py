@@ -1,7 +1,6 @@
 import jax
 import jax.numpy as jnp
 from jax_llama import FlaxLLaMAForCausalLM
-from jax_llama.llama2_tokenizer import Tokenizer as LLaMA2Tokenizer
 from jax_llama.llama3_tokenizer import Tokenizer as LLaMA3Tokenizer
 from transformers.generation import GenerationConfig
 from jax.sharding import Mesh
@@ -15,7 +14,7 @@ from typing import List, Optional, Union
 class LLaMA(struct.PyTreeNode):
     params: PyTree
     model: FlaxLLaMAForCausalLM = struct.field(pytree_node=False)
-    tokenizer: Union[LLaMA2Tokenizer, LLaMA3Tokenizer] = struct.field(pytree_node=False)
+    tokenizer: LLaMA3Tokenizer = struct.field(pytree_node=False)
     mesh: Optional[Mesh] = struct.field(pytree_node=False, default=None)
 
     @partial(jax.jit, static_argnums=(3,4,5))

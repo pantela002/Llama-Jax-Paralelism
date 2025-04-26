@@ -442,9 +442,13 @@ def test_Tokenizer(tokenizer_path: str, test_strs: List[str]) -> None:
         assert jax_tokens == torch_tokens, f"Tokenizer test failed for string: {str_}"
         assert jax_tokenizer.decode(jax_tokens) == torch_tokenizer.decode(torch_tokens), f"Tokenizer test failed for string: {str_}"
 
-def test_ModelLogits(ckpt_dir: str, tokenizer_path: str, test_strs: List[str], atol: float) -> Optional[float]:
-    assert torch.cuda.is_available(), "CUDA is not available."
-    assert jax.lib.xla_bridge.get_backend().platform == "gpu"
+def test_ModelLogits(ckpt_dir: str, tokenizer_path: str,local_rank: int, world_size: int, test_strs: List[str], atol: float) -> Optional[float]:
+    if not torch.cuda.is_available():
+        print("[WARNING] CUDA is not available, running test_ModelLogits on CPU.")
+    # instead of assert torch.cuda.is_available(), "CUDA is not available."
+    #instead of assert jax.lib.xla_bridge.get_backend().platform == "gpu"
+    if jax.lib.xla_bridge.get_backend().platform != "gpu":
+        print("[WARNING] JAX backend is not GPU, running test_ModelLogits on CPU.")
 
     # load jax model
     jax_generator = jax_load(
@@ -541,7 +545,7 @@ def test_ModelGenerations(ckpt_dir: str, tokenizer_path: str, test_strs: List[st
 
     assert all([jax_strs[i].removeprefix('<|begin_of_text|>').strip().removeprefix(test_strs[i]).strip() == torch_strs[i].strip() for i in range(len(test_strs))]), "ModelGenerations test failed"
 
-def main(ckpt_dir: str = "/root/tt/models/8B", tokenizer_path: str = "/root/tt/models/tokenizer.model"):
+def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/root/tt/sw/llama3.1-8B/original/tokenizer.model"):
     np.random.seed(0)
 
     with torch.no_grad():
@@ -623,7 +627,11 @@ def main(ckpt_dir: str = "/root/tt/models/8B", tokenizer_path: str = "/root/tt/m
         print("[Passed]")
         print('='*10)
         
-        """
+
+        local_rank = 0
+        world_size = 1
+
+
         print('='*10)
         print("[Testing ModelLogits]")
         errs = test_ModelLogits(
@@ -642,6 +650,7 @@ def main(ckpt_dir: str = "/root/tt/models/8B", tokenizer_path: str = "/root/tt/m
         print("Mean ModelLogits error: %f" % (np.mean(errs)))
         print("Median ModelLogits error: %f" % (np.median(errs)))
         print('='*10)
+        """
 
         print('='*10)
         print("[Testing ModelGenerations]")

@@ -11,3 +11,4 @@ tiktoken
 fairscale
 fire
 jax
+blobfile

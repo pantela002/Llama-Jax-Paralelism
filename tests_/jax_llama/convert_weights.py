@@ -5,7 +5,6 @@ import json
 import numpy as np
 from jaxtyping import PyTree
 from jax_llama.config import LLaMAConfig
-from jax_llama.llama2_tokenizer import Tokenizer as LLaMA2Tokenizer
 from jax_llama.llama3_tokenizer import Tokenizer as LLaMA3Tokenizer
 from typing import Tuple, Optional
 from dataclasses import dataclass
@@ -42,7 +41,7 @@ def config_from_params(args: ModelArgs) -> LLaMAConfig:
         rope_theta=args.rope_theta
     )
 
-def convert_llama_weights(ckpt_dir: str, tokenizer: Union[LLaMA2Tokenizer, LLaMA3Tokenizer], max_seq_len: int=2048, verbose: bool=False) -> Tuple[PyTree[np.ndarray], LLaMAConfig]:
+def convert_llama_weights(ckpt_dir: str, tokenizer: LLaMA3Tokenizer, max_seq_len: int=2048, verbose: bool=False) -> Tuple[PyTree[np.ndarray], LLaMAConfig]:
     ckpt_paths = sorted(Path(ckpt_dir).glob("*.pth"))
     ckpts = {}
     for i, ckpt_path in enumerate(ckpt_paths):
