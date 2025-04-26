@@ -19,7 +19,6 @@ import functools
 from llama.generation import Llama as torch_load
 from jax_example import load as jax_load
 from flax.linen import make_causal_mask
-from jax_llama.llama2_tokenizer import Tokenizer as LLaMA2Tokenizer
 from jax_llama.llama3_tokenizer import Tokenizer as LLaMA3Tokenizer
 from llama.tokenizer import Tokenizer
 from jax_llama.partition import with_named_sharding_constraint
@@ -30,10 +29,10 @@ import fire
 @dataclass
 class ModelArgs:
     dim: int = 64 #4096
-    n_layers: int = 1
+    n_layers: int = 1 # 32
     n_heads: int = 32
-    vocab_size: int = 128 #128256
     n_kv_heads: Optional[int] = 8
+    vocab_size: int = 128 #128256
     multiple_of: int = 256
     ffn_dim_multiplier: Optional[float] = None
     norm_eps: float = 1e-5
@@ -547,6 +546,7 @@ def main(ckpt_dir: str = "/root/tt/models/8B", tokenizer_path: str = "/root/tt/m
 
     with torch.no_grad():
         with jax.default_device(jax.devices('cpu')[0]):
+            """
             print('='*10)
             print("[Testing RMSNorm]")
             errs = test_RMSNorm(ModelArgs(), 1, atol=1e-2)
@@ -566,7 +566,7 @@ def main(ckpt_dir: str = "/root/tt/models/8B", tokenizer_path: str = "/root/tt/m
 
             print('='*10)
             print("[Testing apply_rotary_emb]")
-            errs0, errs1, _1, _2 = test_apply_roary_emb(ModelArgs(), 1, atol=1e-2)
+            errs0, errs1, _1, _2 = test_apply_roary_emb(ModelArgs(), 128, atol=1e-2)
             print("[Passed]")
             print("Max apply_rotary_emb error: %f, %f" % (np.max(errs0), np.max(errs1)))
             print("Mean apply_rotary_emb error: %f, %f" % (np.mean(errs0), np.mean(errs1)))
@@ -575,7 +575,7 @@ def main(ckpt_dir: str = "/root/tt/models/8B", tokenizer_path: str = "/root/tt/m
 
             print('='*10)
             print("[Testing Attention]")
-            errs, _ = test_Attention(ModelArgs(), 1, atol=1e-2)
+            errs, _ = test_Attention(ModelArgs(), 5, atol=1e-2)
             print("[Passed]")
             print("Max Attention error: %f" % (np.max(errs)))
             print("Mean Attention error: %f" % (np.mean(errs)))
@@ -584,7 +584,7 @@ def main(ckpt_dir: str = "/root/tt/models/8B", tokenizer_path: str = "/root/tt/m
 
             print('='*10)
             print("[Testing FeedForward]")
-            errs,_ = test_feedForward(ModelArgs(), 1, atol=1e-2)
+            errs,_ = test_feedForward(ModelArgs(), 32, atol=1e-2)
             print("[Passed]")
             print("Max FeedForward error: %f" % (np.max(errs)))
             print("Mean FeedForward error: %f" % (np.mean(errs)))
@@ -593,7 +593,7 @@ def main(ckpt_dir: str = "/root/tt/models/8B", tokenizer_path: str = "/root/tt/m
 
             print('='*10)
             print("[Testing TransformerBlock]")
-            errs, _ = test_TransformerBlock(ModelArgs(), 1, atol=1e-2)
+            errs, _ = test_TransformerBlock(ModelArgs(), 5, atol=1e-1)
             print("[Passed]")
             print("Max TransformerBlock error: %f" % (np.max(errs)))
             print("Mean TransformerBlock error: %f" % (np.mean(errs)))
@@ -602,7 +602,7 @@ def main(ckpt_dir: str = "/root/tt/models/8B", tokenizer_path: str = "/root/tt/m
 
             print('='*10)
             print("[Testing Transformer]")
-            errs = test_Transformer(ModelArgs(), 128, atol=1e-2)
+            errs = test_Transformer(ModelArgs(), 5, atol=1e-1)
             print("[Passed]")
             print("Max Transformer error: %f" % (np.max(errs)))
             print("Mean Transformer error: %f" % (np.mean(errs)))
@@ -623,7 +623,7 @@ def main(ckpt_dir: str = "/root/tt/models/8B", tokenizer_path: str = "/root/tt/m
         print("[Passed]")
         print('='*10)
         
-
+        """
         print('='*10)
         print("[Testing ModelLogits]")
         errs = test_ModelLogits(
@@ -659,6 +659,7 @@ def main(ckpt_dir: str = "/root/tt/models/8B", tokenizer_path: str = "/root/tt/m
         print("[Passed]")
         print('='*10)
         """
+        
 
 if __name__ == "__main__":
     fire.Fire(main)

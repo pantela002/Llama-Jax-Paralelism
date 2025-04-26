@@ -25,7 +25,7 @@ initialize_model_parallel(1)
 @dataclass
 class ModelArgs:
     dim: int = 64 #4096
-    n_layers: int = 32
+    n_layers: int = 1
     n_heads: int = 32
     n_kv_heads: int = 8
     vocab_size: int = 128 # -1
