@@ -54,6 +54,7 @@ def convert_llama_weights(ckpt_dir: str, tokenizer: LLaMA3Tokenizer, max_seq_len
     ckpts = [ckpts[i] for i in sorted(list(ckpts.keys()))]
     with open(Path(ckpt_dir) / "params.json", "r") as f:
         params = json.loads(f.read())
+    params.pop("use_scaled_rope", None) # added in llama3
     
     jax_weights = {
         'transformer': {

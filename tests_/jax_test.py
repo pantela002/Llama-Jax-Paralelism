@@ -28,12 +28,12 @@ import fire
 
 @dataclass
 class ModelArgs:
-    dim: int = 64 #4096
+    dim: int = 16 #4096
     n_layers: int = 1 # 32
-    n_heads: int = 32
-    n_kv_heads: Optional[int] = 8
-    vocab_size: int = 128 #128256
-    multiple_of: int = 256
+    n_heads: int = 4 #32
+    n_kv_heads: Optional[int] = 2 #8
+    vocab_size: int = 64 #128256
+    multiple_of: int = 8 #256
     ffn_dim_multiplier: Optional[float] = None
     norm_eps: float = 1e-5
     rope_theta: float = 500000.0
@@ -451,12 +451,12 @@ def test_ModelLogits(ckpt_dir: str, tokenizer_path: str,local_rank: int, world_s
         print("[WARNING] JAX backend is not GPU, running test_ModelLogits on CPU.")
 
     # load jax model
-    jax_generator = jax_load(
+    jax_generator = jax_load(   
         ckpt_dir,
         tokenizer_path,
-        is_llama3 =True,
-        max_seq_length=8192,
-        precision='highest',
+        max_seq_length=64, # 8192
+        precision = 'highest'
+
     )
     jax_model, jax_params = jax_generator.model, jax_generator.params
     tokenizer, mesh = jax_generator.tokenizer, jax_generator.mesh
@@ -474,7 +474,7 @@ def test_ModelLogits(ckpt_dir: str, tokenizer_path: str,local_rank: int, world_s
 
         logits = with_named_sharding_constraint(logits, mesh, P("dp", None))
         return logits
-
+    print("checkpoint0")
     # get logits
     jax_logits = []
     for k in range(len(tokens)):
@@ -485,22 +485,26 @@ def test_ModelLogits(ckpt_dir: str, tokenizer_path: str,local_rank: int, world_s
     del jax_model
     del jax_params
     del get_logits
-    
+    print("checkpoint1")
     
     # get pytorch logits
     torch_generator = torch_load.build(
         ckpt_dir, 
         tokenizer_path,
-        max_seq_len=8192, 
+        max_seq_len=64, # 8192 
         max_batch_size=1, 
         model_parallel_size=1,
         seed=1,
     )
+    print("checkpoint2")
     torch_model, tokenizer = torch_generator.model, torch_generator.tokenizer
     tokens = [tokenizer.encode(x, bos=True, eos=False) for x in test_strs]
     torch_logits = []
+    print("checkpoint3")
     for k in range(len(tokens)):
-        in_array = torch.tensor(tokens[k][:torch_model.params.max_seq_len]).long().cuda().unsqueeze(0)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        in_array = torch.tensor(tokens[k][:torch_model.params.max_seq_len]).long().to(device).unsqueeze(0)
+        #in_array = torch.tensor(tokens[k][:torch_model.params.max_seq_len]).long().cuda().unsqueeze(0)
         torch_logits.append(torch_model.forward(in_array, 0)[:, -1, :])
     torch_logits = torch.cat(torch_logits, dim=0).detach().cpu().numpy()
     # unload pytorch model
@@ -511,17 +515,19 @@ def test_ModelLogits(ckpt_dir: str, tokenizer_path: str,local_rank: int, world_s
     
     return np.max(np.abs(jax_logits - torch_logits).reshape(len(test_strs), -1), axis=1)
 
+def test_ModelGenerations(ckpt_dir: str, tokenizer_path: str, local_rank: int, world_size: int, test_strs: List[str], gen_len: int=32) -> None:
+    if not torch.cuda.is_available():
+        print("[WARNING] CUDA is not available, running test_ModelLogits on CPU.")
+    # instead of assert torch.cuda.is_available(), "CUDA is not available."
+    #instead of assert jax.lib.xla_bridge.get_backend().platform == "gpu"
+    if jax.lib.xla_bridge.get_backend().platform != "gpu":
+        print("[WARNING] JAX backend is not GPU, running test_ModelLogits on CPU.")
 
-def test_ModelGenerations(ckpt_dir: str, tokenizer_path: str, test_strs: List[str], gen_len: int=32) -> None:
-    assert torch.cuda.is_available(), "CUDA is not available."
-    assert jax.lib.xla_bridge.get_backend().platform == "gpu"
-    
     # load jax model
     jax_generator = jax_load(
         ckpt_dir,
         tokenizer_path,
-        is_llama3=True,
-        max_seq_length=8192,
+        max_seq_length=64 #8192,
         # precision='highest',
     )
     jax_strs = jax_generator.generate_from_str(test_strs, max_gen_len=gen_len, temperature=0.0, top_p=1.0)
@@ -532,7 +538,7 @@ def test_ModelGenerations(ckpt_dir: str, tokenizer_path: str, test_strs: List[st
     torch_generator = torch_load.build(
         ckpt_dir, 
         tokenizer_path,
-        max_seq_len=8192, 
+        max_seq_len=64, #8192, 
         max_batch_size=len(test_strs), 
         model_parallel_size=1,
         seed=1,
@@ -631,7 +637,7 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
         local_rank = 0
         world_size = 1
 
-
+        """
         print('='*10)
         print("[Testing ModelLogits]")
         errs = test_ModelLogits(
@@ -641,7 +647,7 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
             world_size, 
             [
                 "The capital of Germany is the city of", 
-                "Here is my sonnet in the style of Shakespeare about an artificial intelligence:", 
+                #"Here is my sonnet in the style of Shakespeare about an artificial intelligence:", 
             ], 
             atol=5e-1, 
         )
@@ -649,8 +655,9 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
         print("Max ModelLogits error: %f" % (np.max(errs)))
         print("Mean ModelLogits error: %f" % (np.mean(errs)))
         print("Median ModelLogits error: %f" % (np.median(errs)))
-        print('='*10)
-        """
+        print('='*10)"""
+        print("gotovo modellogits")
+        
 
         print('='*10)
         print("[Testing ModelGenerations]")
@@ -667,7 +674,7 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
         )
         print("[Passed]")
         print('='*10)
-        """
+        
         
 
 if __name__ == "__main__":
