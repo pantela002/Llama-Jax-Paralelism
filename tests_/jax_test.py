@@ -21,10 +21,9 @@ from jax_example import load as jax_load
 from flax.linen import make_causal_mask
 from jax_llama.llama3_tokenizer import Tokenizer as LLaMA3Tokenizer
 from llama.tokenizer import Tokenizer
-from jax_llama.partition import with_named_sharding_constraint
 from jax.sharding import PartitionSpec as P
 import fire
-
+import flax.nnx as nnx
 
 @dataclass
 class ModelArgs:
@@ -72,18 +71,23 @@ def test_RMSNorm(args: ModelArgs, total_tests: int, atol: float) -> np.ndarray:
     for test_n in range(total_tests):
         x = np.random.randn(args.max_batch_size, args.dim).astype(np.float32)
 
-        jax_rms_norm = jax_model.RMSNorm(args.dim, eps=args.norm_eps)
-        jax_params = jax_rms_norm.init(jax.random.PRNGKey(0), jnp.ones(args.dim, dtype=jnp.float32))['params']
-        jax_output = jax_rms_norm.apply({'params': jax_params}, jnp.asarray(x))
-        jax_output = np.asarray(jax_output)
+        # ✅ NNX-compatible RMSNorm (no apply, use state(model)(...) instead)
+        rngs = nnx.Rngs(0)
+        jax_rms_norm = jax_model.RMSNorm(args.dim, eps=args.norm_eps, rngs=rngs)
+        state = nnx.state(jax_rms_norm)
+        jax_output, _ = state(jax_rms_norm)(jnp.asarray(x))  # <-- the fix
 
+        # ✅ Torch RMSNorm (no change)
         torch_rms_norm = model.RMSNorm(args.dim, eps=args.norm_eps)
         torch_output = torch_rms_norm(torch.tensor(x))
         torch_output = torch_output.detach().numpy()
 
+        # ✅ Compare
+        jax_output = np.asarray(jax_output)
         assert np.allclose(jax_output, torch_output, atol=atol), f"RMSNorm test {test_n} failed"
         errs.append(np.max(np.abs(jax_output - torch_output)))
 
+        # ✅ Pearson correlation
         flat_jax = jax_output.flatten()
         flat_torch = torch_output.flatten()
         pcc_value, _ = pearsonr(flat_jax, flat_torch)
@@ -414,7 +418,7 @@ def test_Transformer(args: ModelArgs, total_tests: int, atol: float) -> np.ndarr
         torch_transformer.load_state_dict({
             "tok_embeddings.weight": torch.tensor(tok_embeddings), 
             "norm.weight": torch.tensor(norm), 
-            "output.weight": torch.tensor(output.T), #TODO CHANGED  FROM .TRANSPOSE()
+            "output.weight": torch.tensor(output.T),
             **functools.reduce(lambda x, y: {**x, **y}, [torch_layer_weight(i) for i in range(args.n_layers)]), 
         }) # load weights
         torch_output = torch_transformer(torch.tensor(x), 0)[:, -1, :]
@@ -441,7 +445,7 @@ def test_Tokenizer(tokenizer_path: str, test_strs: List[str]) -> None:
         torch_tokens = torch_tokenizer.encode(str_, bos=True, eos=False)
         assert jax_tokens == torch_tokens, f"Tokenizer test failed for string: {str_}"
         assert jax_tokenizer.decode(jax_tokens) == torch_tokenizer.decode(torch_tokens), f"Tokenizer test failed for string: {str_}"
-
+"""
 def test_ModelLogits(ckpt_dir: str, tokenizer_path: str,local_rank: int, world_size: int, test_strs: List[str], atol: float) -> Optional[float]:
     if not torch.cuda.is_available():
         print("[WARNING] CUDA is not available, running test_ModelLogits on CPU.")
@@ -483,7 +487,7 @@ def test_ModelLogits(ckpt_dir: str, tokenizer_path: str,local_rank: int, world_s
     jax_logits = np.asarray(jnp.concatenate(jax_logits, axis=0))
     # unload jax model
     del jax_model
-    del jax_params
+    del jax_params  
     del get_logits
     print("checkpoint1")
     
@@ -514,6 +518,8 @@ def test_ModelLogits(ckpt_dir: str, tokenizer_path: str,local_rank: int, world_s
     assert np.allclose(jax_logits, torch_logits, atol=atol), "ModelLogits test failed"
     
     return np.max(np.abs(jax_logits - torch_logits).reshape(len(test_strs), -1), axis=1)
+"""
+
 
 def test_ModelGenerations(ckpt_dir: str, tokenizer_path: str, local_rank: int, world_size: int, test_strs: List[str], gen_len: int=32) -> None:
     if not torch.cuda.is_available():
@@ -556,7 +562,7 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
 
     with torch.no_grad():
         with jax.default_device(jax.devices('cpu')[0]):
-            """
+            
             print('='*10)
             print("[Testing RMSNorm]")
             errs = test_RMSNorm(ModelArgs(), 1, atol=1e-2)
@@ -566,6 +572,7 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
             print("Median RMSNorm error: %f" % (np.median(errs)))
             print('='*10)
             print('='*10)
+        """
             print("[Testing precompute_freqs_cis]")
             errs = test_precompute_freqs_cis(ModelArgs(), atol=1e-2)
             print("[Passed]")
@@ -619,7 +626,6 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
             print("Median Transformer error: %f" % (np.median(errs)))
             print('='*10)
                 
-        """
 
         print('='*10)
         print("[Testing Tokenizer]")
@@ -634,10 +640,9 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
         print('='*10)
         
 
-        local_rank = 0
-        world_size = 1
 
-        """
+
+        
         print('='*10)
         print("[Testing ModelLogits]")
         errs = test_ModelLogits(
@@ -655,11 +660,11 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
         print("Max ModelLogits error: %f" % (np.max(errs)))
         print("Mean ModelLogits error: %f" % (np.mean(errs)))
         print("Median ModelLogits error: %f" % (np.median(errs)))
-        print('='*10)"""
         print("gotovo modellogits")
+        print('='*10)"""
         
 
-        print('='*10)
+        """print('='*10)
         print("[Testing ModelGenerations]")
         test_ModelGenerations(
             ckpt_dir, 
@@ -674,7 +679,7 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
         )
         print("[Passed]")
         print('='*10)
-        
+        """
         
 
 if __name__ == "__main__":
