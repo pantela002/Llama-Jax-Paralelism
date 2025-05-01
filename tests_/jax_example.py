@@ -6,6 +6,8 @@ from jax.sharding import Mesh
 from jax.sharding import NamedSharding
 from jax.experimental import mesh_utils
 import fire
+import os
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
 
 def load(ckpt_dir: str, tokenizer_path: str, max_seq_length: int=2048, **model_kwargs) -> LLaMA:
     # setup jax mesh
@@ -18,7 +20,7 @@ def load(ckpt_dir: str, tokenizer_path: str, max_seq_length: int=2048, **model_k
 
     jax_params, jax_config = convert_llama_weights(ckpt_dir, tokenizer, max_seq_len=max_seq_length)
     with jax.default_device(jax.devices('cpu')[0]):
-        jax_params = freeze(jax.tree_map(lambda x: jnp.asarray(x), jax_params))
+        jax_params = freeze(jax.tree.map(lambda x: jnp.asarray(x), jax_params))
     # shard params
     param_spec = freeze(get_llama_param_partition_spec(unfreeze(jax_params), fsdp=False))
     jax_params = jax.tree_util.tree_map(lambda param, spec: jax.device_put(param, NamedSharding(mesh, spec)), jax_params, param_spec)

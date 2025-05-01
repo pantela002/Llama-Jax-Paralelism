@@ -454,8 +454,7 @@ def test_ModelLogits(ckpt_dir: str, tokenizer_path: str,local_rank: int, world_s
     jax_generator = jax_load(
         ckpt_dir,
         tokenizer_path,
-        is_llama3 =True,
-        max_seq_length=8192,
+        max_seq_length=128, #8192,
         precision='highest',
     )
     jax_model, jax_params = jax_generator.model, jax_generator.params
@@ -491,7 +490,7 @@ def test_ModelLogits(ckpt_dir: str, tokenizer_path: str,local_rank: int, world_s
     torch_generator = torch_load.build(
         ckpt_dir, 
         tokenizer_path,
-        max_seq_len=8192, 
+        max_seq_len=128 ,#8192, 
         max_batch_size=1, 
         model_parallel_size=1,
         seed=1,
@@ -520,8 +519,7 @@ def test_ModelGenerations(ckpt_dir: str, tokenizer_path: str, test_strs: List[st
     jax_generator = jax_load(
         ckpt_dir,
         tokenizer_path,
-        is_llama3=True,
-        max_seq_length=8192,
+        max_seq_length=128, #8192,
         # precision='highest',
     )
     jax_strs = jax_generator.generate_from_str(test_strs, max_gen_len=gen_len, temperature=0.0, top_p=1.0)
@@ -532,7 +530,7 @@ def test_ModelGenerations(ckpt_dir: str, tokenizer_path: str, test_strs: List[st
     torch_generator = torch_load.build(
         ckpt_dir, 
         tokenizer_path,
-        max_seq_len=8192, 
+        max_seq_len=128, #8192, 
         max_batch_size=len(test_strs), 
         model_parallel_size=1,
         seed=1,
@@ -650,7 +648,7 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
         print("Mean ModelLogits error: %f" % (np.mean(errs)))
         print("Median ModelLogits error: %f" % (np.median(errs)))
         print('='*10)
-        """
+        
 
         print('='*10)
         print("[Testing ModelGenerations]")
@@ -667,7 +665,7 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
         )
         print("[Passed]")
         print('='*10)
-        """
+        
         
 
 if __name__ == "__main__":
