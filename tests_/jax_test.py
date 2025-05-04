@@ -28,8 +28,8 @@ import fire
 
 @dataclass
 class ModelArgs:
-    dim: int = 64 #4096
-    n_layers: int = 1 # 32
+    dim: int = 4096 #4096
+    n_layers: int = 32 # 32
     n_heads: int = 32
     n_kv_heads: Optional[int] = 8
     vocab_size: int = 128 #128256

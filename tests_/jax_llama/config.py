@@ -99,6 +99,7 @@ class LLaMAConfig(PretrainedConfig):
         self.num_attention_heads = num_attention_heads
         self.num_key_value_heads = num_key_value_heads
         self.max_sequence_length = max_sequence_length
+        self.max_position_embeddings = max_sequence_length
         self.rms_norm_eps = rms_norm_eps
         self.use_cache = use_cache
         self.resid_pdrop = resid_pdrop
@@ -113,6 +114,9 @@ class LLaMAConfig(PretrainedConfig):
             "original_max_position_embeddings": 8192,
             "rope_type": "llama3",
         }
+        self.resid_pdrop = 0.0
+        self.embd_pdrop = 0.0
+        self.attn_pdrop = 0.0
 
         super().__init__(
             pad_token_id=pad_token_id,

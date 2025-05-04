@@ -14,10 +14,12 @@ from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 from jax_llama.model import FlaxLLaMAForCausalLM
 from jax_llama.config import LLaMAConfig
 from jax_llama.partition import get_llama_param_partition_spec
+from jax.experimental import pjit as old_pjit
 
 # 1. Setup a fake mesh: 2 data × 4 model = 8 devices
-devices = np.array(jax.devices()).reshape(2, 4)
+devices = np.array(jax.devices()).reshape(2, 4) 
 mesh = Mesh(devices, axis_names=("dp", "mp"))
+
 
 # 2. Build config and model
 config = LLaMAConfig(
@@ -33,17 +35,32 @@ config = LLaMAConfig(
 
 model = FlaxLLaMAForCausalLM(config=config)
 params = model.init_weights(jax.random.PRNGKey(0), input_shape=(1, 8))
+params = freeze(params)
 
 # 3. Get partition spec from your partition.py logic
 param_spec = get_llama_param_partition_spec(params)
 
 # 4. Shard params using pjit
-@pjit(in_axis_resources=None, out_axis_resources=param_spec)
-def shard_params(params):
-    return params
+shard_params = old_pjit.pjit(
+    lambda x: x,
+    None,                # in_axis_resources
+    param_spec,          # out_axis_resources
+    (),                  # static_argnums
+    (),                  # donate_argnums
+)
 
 with mesh:
     sharded_params = shard_params(params)
+
+    # 🔍 Visualize sharding of a few parameters
+    from flax.traverse_util import flatten_dict
+    import jax.debug
+
+    print("\n🔍 Visualizing sharded parameter placements (first few):")
+    flat = flatten_dict(sharded_params)
+    for k, v in list(flat.items())[:5]:  # visualize 5 parameters
+        print(f"🔹 Param {k} sharding:")
+        jax.debug.visualize_array_sharding(v)
 
 # 5. Create dummy inputs
 input_ids = jnp.ones((1, 8), dtype=jnp.int32)
@@ -61,3 +78,9 @@ with mesh:
     )
 
 print("✅ Logits shape:", output.logits.shape)
+
+print(output)
+
+#save txt output to file
+with open("output.txt", "w") as f:
+    f.write(str(output.logits))
