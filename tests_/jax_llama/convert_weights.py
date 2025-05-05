@@ -8,6 +8,8 @@ from jax_llama.config import LLaMAConfig
 from jax_llama.llama3_tokenizer import Tokenizer as LLaMA3Tokenizer
 from typing import Tuple, Optional
 from dataclasses import dataclass
+import os
+import psutil
 
 @dataclass
 class ModelArgs:
@@ -79,6 +81,19 @@ def convert_llama_weights(ckpt_dir: str, tokenizer: LLaMA3Tokenizer, max_seq_len
         }, 
         'lm_head': {'kernel': np.concatenate([ckpt['output.weight'].type(torch.float16).numpy() for ckpt in ckpts], axis=0).transpose()}, 
     }
+    
     params.update({'vocab_size': len(tokenizer), 'max_seq_len': max_seq_len})
     llama_config = config_from_params(ModelArgs(**params))
+
+    del ckpts
+    torch.cuda.empty_cache()  # Not necessary on CPU, but okay
+    import gc; gc.collect()
+
+
+    process = psutil.Process(os.getpid())
+    mem_mb = process.memory_info().rss / (1024 * 1024)
+
+    print(f"\n✅ Peak memory usage before return from converting: {mem_mb:.2f} MB")
+
+
     return jax_weights, llama_config
