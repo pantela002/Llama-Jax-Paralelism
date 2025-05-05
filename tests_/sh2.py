@@ -9,7 +9,8 @@ from jax_llama.convert_weights import convert_llama_weights  # assumes this exis
 from transformers import AutoConfig
 import numpy as np
 from jax_llama import config
-
+import os
+from flax.traverse_util import flatten_dict
 
 
 # === CONFIGURE THESE ===
@@ -35,6 +36,18 @@ jax_params, _ = convert_llama_weights(
 )
 model = FlaxLLaMAForCausalLM(config=config, dtype=jnp.float16)
 params = freeze(jax.tree.map(jnp.asarray, jax_params))
+
+flat_params = flatten_dict(params, sep='.')
+os.makedirs("jax_params", exist_ok=True)
+
+with open("jax_params.txt", "w") as f:
+    for key, value in flat_params.items():
+        np_value = np.array(value)
+        f.write(f"{key}: shape={np_value.shape}, dtype={np_value.dtype}\n")
+        f.write(np.array2string(np_value, separator=', ', threshold=10, edgeitems=3))
+        f.write("\n\n")
+
+"""
 
 # 4. Create dummy input
 input_ids = jnp.ones((1, 8), dtype=jnp.int32)
@@ -64,3 +77,4 @@ print("✅ Logits shape (real weights, unsharded):", output.logits.shape)
 print(output.logits)
 
 np.save("output_jax_unsharded.npy", output.logits)
+"""

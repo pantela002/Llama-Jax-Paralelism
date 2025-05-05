@@ -1,6 +1,10 @@
 import torch
 from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
 import numpy as np
+import os
+
+os.makedirs("hf_params", exist_ok=True)
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -17,6 +21,13 @@ tokenizer = AutoTokenizer.from_pretrained(model_id)
 # 4. Build model from modified config (randomly initialized)
 model = AutoModelForCausalLM.from_config(hf_config).to(dtype=torch.float16, device=device)
 model.eval()
+
+with open("hf_params.txt", "w") as f:
+    for name, param in model.named_parameters():
+        np_param = param.detach().cpu().numpy()
+        f.write(f"{name}: shape={np_param.T.shape}, dtype={np_param.dtype}\n")
+        f.write(np.array2string(np_param.T, separator=', ', threshold=10, edgeitems=3))
+        f.write("\n\n")
 
 
 # 3. Create dummy inputs

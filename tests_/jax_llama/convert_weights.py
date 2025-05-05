@@ -16,7 +16,7 @@ class ModelArgs:
     dim: int = 4096
     n_layers: int = 32
     n_heads: int = 32
-    n_kv_heads: Optional[int] = None
+    n_kv_heads: Optional[int] = 8
     vocab_size: int = -1  # defined later by tokenizer
     multiple_of: int = 256  # make SwiGLU hidden layer size multiple of large power of 2
     ffn_dim_multiplier: Optional[float] = None
@@ -24,7 +24,7 @@ class ModelArgs:
     rope_theta: float = 500000.0
 
     max_batch_size: int = 1
-    max_seq_len: int = 64
+    max_seq_len: int = 131072
 
 def config_from_params(args: ModelArgs) -> LLaMAConfig:
     intermediate_size = int(2 * (args.dim * 4) / 3)
@@ -57,6 +57,25 @@ def convert_llama_weights(ckpt_dir: str, tokenizer: LLaMA3Tokenizer, max_seq_len
     with open(Path(ckpt_dir) / "params.json", "r") as f:
         params = json.loads(f.read())
     params.pop("use_scaled_rope", None) 
+
+    import os
+    os.makedirs("raw_torch_weights_txt", exist_ok=True)
+
+    for key in ckpts[0].keys():
+        if "weight" in key and ckpts[0][key].ndim <= 2:
+            tensor = ckpts[0][key].cpu()
+            if tensor.dtype == torch.bfloat16:
+                tensor = tensor.to(dtype=torch.float32)  # safer for serialization
+            np_array = tensor.numpy()
+
+            # Save as .txt
+            with open(f"raw_torch_weights_txt/{key.replace('.', '_')}.txt", "w") as f:
+                f.write(f"{key}: shape={np_array.shape}, dtype={np_array.dtype}\n")
+                f.write(np.array2string(np_array, separator=', ', threshold=10, edgeitems=3))
+                f.write("\n\n")
+
+
+    return 
     jax_weights = {
         'transformer': {
             'wte': {'embedding': np.concatenate([ckpt['tok_embeddings.weight'].type(torch.float16).numpy() for ckpt in ckpts], axis=1)}, 
