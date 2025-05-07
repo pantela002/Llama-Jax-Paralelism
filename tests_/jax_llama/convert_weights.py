@@ -73,9 +73,6 @@ def convert_llama_weights(ckpt_dir: str, tokenizer: LLaMA3Tokenizer, max_seq_len
                 f.write(f"{key}: shape={np_array.shape}, dtype={np_array.dtype}\n")
                 f.write(np.array2string(np_array, separator=', ', threshold=10, edgeitems=3))
                 f.write("\n\n")
-
-
-    return 
     jax_weights = {
         'transformer': {
             'wte': {'embedding': np.concatenate([ckpt['tok_embeddings.weight'].type(torch.float16).numpy() for ckpt in ckpts], axis=1)}, 
@@ -116,3 +113,49 @@ def convert_llama_weights(ckpt_dir: str, tokenizer: LLaMA3Tokenizer, max_seq_len
 
 
     return jax_weights, llama_config
+
+
+def convert_state_dict_keys(state_dict):
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        if key.startswith("tok_embeddings.weight"):
+            new_key = "model.embed_tokens.weight"
+        elif key.startswith("output.weight"):
+            new_key = "lm_head.weight"
+        elif key.startswith("norm.weight"):
+            new_key = "model.norm.weight"
+        elif key.startswith("layers."):
+            parts = key.split('.')
+            layer_num = parts[1]
+            sublayer = parts[2]
+            weight_type = parts[3]
+
+            if sublayer == "attention":
+                if weight_type == "wq":
+                    new_key = f"model.layers.{layer_num}.self_attn.q_proj.weight"
+                elif weight_type == "wk":
+                    new_key = f"model.layers.{layer_num}.self_attn.k_proj.weight"
+                elif weight_type == "wv":
+                    new_key = f"model.layers.{layer_num}.self_attn.v_proj.weight"
+                elif weight_type == "wo":
+                    new_key = f"model.layers.{layer_num}.self_attn.o_proj.weight"
+            elif sublayer == "feed_forward":
+                if weight_type == "w1":
+                    new_key = f"model.layers.{layer_num}.mlp.gate_proj.weight"
+                elif weight_type == "w2":
+                    new_key = f"model.layers.{layer_num}.mlp.down_proj.weight"
+                elif weight_type == "w3":
+                    new_key = f"model.layers.{layer_num}.mlp.up_proj.weight"
+            elif sublayer == "attention_norm":
+                new_key = f"model.layers.{layer_num}.input_layernorm.weight"
+            elif sublayer == "ffn_norm":
+                new_key = f"model.layers.{layer_num}.post_attention_layernorm.weight"
+            else:
+                print(f"⚠️ Unknown sublayer: {key}")
+                continue
+        else:
+            print(f"⚠️ Unknown key: {key}")
+            continue
+
+        new_state_dict[new_key] = value
+    return new_state_dict
