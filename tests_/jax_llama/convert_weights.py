@@ -24,7 +24,7 @@ class ModelArgs:
     rope_theta: float = 500000.0
 
     max_batch_size: int = 1
-    max_seq_len: int = 131072
+    max_seq_len: int = 128 #131072
 
 def config_from_params(args: ModelArgs) -> LLaMAConfig:
     intermediate_size = int(2 * (args.dim * 4) / 3)
@@ -93,7 +93,7 @@ def convert_llama_weights(ckpt_dir: str, tokenizer: LLaMA3Tokenizer, max_seq_len
                     'attention_norm': {'kernel': ckpts[0]['layers.%d.attention_norm.weight' % (layer)].type(torch.float16).numpy()}, 
                     'ffn_norm': {'kernel': ckpts[0]['layers.%d.ffn_norm.weight' % (layer)].type(torch.float16).numpy()}, 
                 }
-            for layer in range(params['n_layers'])}, 
+            for layer in range(2)}, 
         }, 
         'lm_head': {'kernel': np.concatenate([ckpt['output.weight'].type(torch.float16).numpy() for ckpt in ckpts], axis=0).transpose()}, 
     }

@@ -24,8 +24,8 @@ config = LLaMAConfig(
     attn_pdrop = 0.0,
     tie_word_embeddings = False,
     gradient_checkpointing = False,
-    num_hidden_layers=1,  # 👈 force only 1 layer
-    max_sequence_length = 2048
+    num_hidden_layers=2,  # 👈 force only 1 layer
+    max_sequence_length = 128
 
 
 )
@@ -35,9 +35,23 @@ tokenizer = LLaMA3Tokenizer(tokenizer_path)
 jax_params, _ = convert_llama_weights(
     ckpt_dir=ckpt_dir,
     tokenizer=tokenizer,
+    max_seq_len=128,
+    verbose=True
 )
-model = FlaxLLaMAForCausalLM(config=config, dtype=jnp.float16)
+print(sorted(jax_params['transformer']['h'].keys()))
+
+model = FlaxLLaMAForCausalLM(config=config, dtype=jnp.float16, _do_init=False)
 params = freeze(jax.tree.map(jnp.asarray, jax_params))
+print(sorted(params['transformer']['h'].keys()))
+
+"""from flax.traverse_util import flatten_dict
+flat = flatten_dict(params)
+print("🔍 Inspecting loaded parameter stats (first 10 entries):")
+for name, value in list(flat.items())[:10]:
+    value_np = np.array(value)
+    print(f"{name}: mean={value_np.mean():.4f}, std={value_np.std():.4f}")
+
+exit(0)"""
 
 """
 flat_params = flatten_dict(params, sep='.')
@@ -77,6 +91,6 @@ np.set_printoptions(threshold=np.inf, linewidth=np.inf)
 
 # 6. Output
 print("✅ Logits shape (real weights, unsharded):", output.logits.shape)
-print(output.logits)
+#print(output.logits)
 
 np.save("output_jax_unsharded.npy", output.logits)

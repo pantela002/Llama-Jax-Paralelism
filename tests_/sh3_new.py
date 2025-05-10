@@ -86,3 +86,9 @@ np.set_printoptions(threshold=np.inf, linewidth=np.inf)
 print("✅ Logits shape:", output.logits.shape)
 print(output.logits)
 np.save("output_hf_unsharded.npy", output.logits.cpu().numpy())
+
+
+
+
+
+

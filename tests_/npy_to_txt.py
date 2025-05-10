@@ -2,8 +2,8 @@ import numpy as np
 import os
 
 # === Path to your .npy file ===
-npy_path = "/root/tt/output_hf_unsharded.npy"
-txt_path = "/root/tt/output_hf_unsharded.txt"
+npy_path = "/root/tt/output_jax_unsharded.npy"
+txt_path = "/root/tt/output_jax_unsharded.txt"
 
 # === Load the .npy array ===
 array = np.load(npy_path)
