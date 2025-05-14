@@ -45,7 +45,7 @@ def load(ckpt_dir: str, tokenizer_path: str, max_seq_length: int=2048, **model_k
     model = FlaxLLaMAForCausalLM(jax_config, _do_init=False)
     return LLaMA(jax_params, model, tokenizer, mesh=mesh)
 
-def main(ckpt_dir: str, tokenizer_path: str, is_llama3: bool, max_gen_len: int=256, temperature: float = 0.8, top_p: float = 0.95):
+def main(ckpt_dir: str, tokenizer_path: str, max_gen_len: int=256, temperature: float = 0.8, top_p: float = 0.95):
     generator = load(ckpt_dir, tokenizer_path)
     prompts = ["The capital of Germany is the city of", "Here is my sonnet in the style of Shakespeare about an artificial intelligence:"]
     results = generator.generate_from_str(prompts, max_gen_len=max_gen_len, temperature=temperature, top_p=top_p)

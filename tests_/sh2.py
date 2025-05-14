@@ -24,7 +24,7 @@ config = LLaMAConfig(
     attn_pdrop = 0.0,
     tie_word_embeddings = False,
     gradient_checkpointing = False,
-    num_hidden_layers=1,  # 👈 force only 1 layer
+    num_hidden_layers=2,  # 👈 force only 1 layer
     max_sequence_length = 2048
 
 

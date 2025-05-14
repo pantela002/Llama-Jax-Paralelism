@@ -12,3 +12,4 @@ fairscale
 fire
 jax
 blobfile
+scikit-learn

@@ -16,6 +16,7 @@ hf_config = AutoConfig.from_pretrained(model_id)
 hf_config.num_hidden_layers = 1
 hf_config.tie_word_embeddings = False
 hf_config.torch_dtype = torch.float16
+hf_config.max_seq_len = 2048
 
 # 2. Load tokenizer
 tokenizer = AutoTokenizer.from_pretrained(model_id)

@@ -24,7 +24,7 @@ class ModelArgs:
     rope_theta: float = 500000.0
 
     max_batch_size: int = 1
-    max_seq_len: int = 131072
+    max_seq_len: int = 2048
 
 def config_from_params(args: ModelArgs) -> LLaMAConfig:
     intermediate_size = int(2 * (args.dim * 4) / 3)

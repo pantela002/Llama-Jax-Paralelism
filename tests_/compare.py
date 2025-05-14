@@ -4,7 +4,7 @@ from sklearn.metrics import mean_squared_error
 
 # Load logits from .npy files
 logits1 = np.load("/root/tt/output_jax_unsharded.npy")
-logits2 = np.load("/root/tt/output_jax_sharded.npy")
+logits2 = np.load("/root/tt/output_hf_unsharded.npy")
 
 # Flatten both arrays
 logits1 = logits1.flatten()

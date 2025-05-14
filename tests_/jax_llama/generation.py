@@ -33,8 +33,8 @@ class LLaMA(struct.PyTreeNode):
                 pad_token_id=self.tokenizer.eos_id, 
                 eos_token_id=self.tokenizer.eos_id, 
                 temperature=temperature, 
-                top_p=top_p, 
-            ), 
+                top_p=top_p
+            )
         )
         out_tokens = generations.sequences
         
@@ -43,6 +43,7 @@ class LLaMA(struct.PyTreeNode):
     
     def generate_from_str(self, prompts: List[str], max_gen_len: int, temperature: float = 0.8, top_p: float = 0.95):
         prompt_tokens = [self.tokenizer.encode(x, bos=True, eos=False) for x in prompts]
+
 
         max_prompt_size = max([len(t) for t in prompt_tokens])
 
@@ -54,14 +55,26 @@ class LLaMA(struct.PyTreeNode):
         out_tokens = self.generate(tokens, attention_mask, max_gen_len, temperature, top_p)
 
         decoded = []
+        #save out tokens in txt file
+        with open("out_tokens.txt", "w") as f:
+            for i, t in enumerate(out_tokens.tolist()):
+                f.write(f"{i}: {t}\n")
+        
         for i, t in enumerate(out_tokens.tolist()):
             # cut to max gen len
-            t = t[t.index(self.tokenizer.bos_id):]
-            t = t[:(len(prompt_tokens[i])+max_gen_len)]
-            # cut to eos tok if any
+            #t = t[t.index(self.tokenizer.bos_id):]
+            #t = t[:(len(prompt_tokens[i])+max_gen_len)]
             try:
-                t = t[:t.index(self.tokenizer.eos_id)]
+                start_idx = t.index(self.tokenizer.bos_id)
             except ValueError:
-                pass
+                start_idx = 0  # fallback if BOS not present
+            t = t[start_idx:]
+
+            # cut to eos tok if any
+            if self.tokenizer.eos_id in t:
+                t = t[:t.index(self.tokenizer.eos_id)]
             decoded.append(self.tokenizer.decode(t))
+
+
+
         return decoded
