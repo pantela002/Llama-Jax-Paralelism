@@ -42,12 +42,12 @@ class LLaMA(struct.PyTreeNode):
         return out_tokens
     
     def generate_from_str(self, prompts: List[str], max_gen_len: int, temperature: float = 0.8, top_p: float = 0.95):
-        prompt_tokens = [self.tokenizer.encode(x, bos=True, eos=False) for x in prompts]
+        prompt_tokens = [self.tokenizer.encode(x, bos=True, eos=False,  allowed_special="all", disallowed_special=()) for x in prompts]
 
 
         max_prompt_size = max([len(t) for t in prompt_tokens])
 
-        tokens = jnp.full((len(prompts), max_prompt_size), self.tokenizer.eos_id).astype(jnp.int32)
+        tokens = jnp.full((len(prompts), max_prompt_size), self.tokenizer.pad_id).astype(jnp.int32)
         for i, t in enumerate(prompt_tokens):
             tokens = tokens.at[i, -len(t):].set(t) # left pad
         attention_mask = (tokens != self.tokenizer.eos_id).astype(jnp.int32)
@@ -59,11 +59,27 @@ class LLaMA(struct.PyTreeNode):
         with open("out_tokens.txt", "w") as f:
             for i, t in enumerate(out_tokens.tolist()):
                 f.write(f"{i}: {t}\n")
-        
+
         for i, t in enumerate(out_tokens.tolist()):
+            
+            try:
+                start_idx = t.index(self.tokenizer.bos_id)
+            except ValueError:
+                start_idx = 0  # fallback if BOS not present
+            t = t[start_idx:]
+
+
+            #if self.tokenizer.eos_id in t:
+            #    t = t[:t.index(self.tokenizer.eos_id)]
+            decoded.append(self.tokenizer.decode(t))
+        
+            """
+            for i, t in enumerate(out_tokens.tolist()):
             # cut to max gen len
             #t = t[t.index(self.tokenizer.bos_id):]
             #t = t[:(len(prompt_tokens[i])+max_gen_len)]
+            prompt_len = len(prompt_tokens[i])
+            t = t[prompt_len:]
             try:
                 start_idx = t.index(self.tokenizer.bos_id)
             except ValueError:
@@ -73,8 +89,13 @@ class LLaMA(struct.PyTreeNode):
             # cut to eos tok if any
             if self.tokenizer.eos_id in t:
                 t = t[:t.index(self.tokenizer.eos_id)]
-            decoded.append(self.tokenizer.decode(t))
 
+            full_decoded = self.tokenizer.decode(t)
+            
+            if full_decoded.startswith(prompts[i]):
+                full_decoded = full_decoded[len(prompts[i]):]
 
+            decoded.append(full_decoded)\
+            """
 
         return decoded
