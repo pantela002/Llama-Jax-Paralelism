@@ -31,6 +31,8 @@ llama-3.1.8b-tensor-parallel-draft
 
 Clone the repository and checkout the branch:
 git checkout llama-3.1.8b-tensor-parallel-draft
+
+cd sw
 ```
 
 ### 📁 Download and Structure Model Files
