@@ -7,36 +7,34 @@ This draft PR adds a tensor-parallel JAX implementation of Meta’s LLaMA 3.1–
 ## ✅ Setup Instructions
 
 ### 1. Install Python and Create Virtual Environment
-```bash
+```
 sudo apt install python3.12-venv
 mkdir tt
 cd tt
 python3.12 -m venv llama
 source llama/bin/activate
-
-2. Hugging Face Login
-
+```
+### 2. Hugging Face Login
+```
 You must log into Hugging Face to download the LLaMA 3.1 weights.
 
 pip install huggingface_hub
 huggingface-cli login
 
     Make sure you've requested access to the Meta LLaMA 3 model: https://huggingface.co/meta-llama
-
-🌿 Branch for This Implementation
-
+```
+### 🌿 Branch for This Implementation
+```
 All changes for this draft PR are in the branch:
 
 llama-3.1.8b-tensor-parallel-draft
 
 Clone the repository and checkout the branch:
-
-git clone git@github.com:<your-username>/tt-xla.git
-cd tt-xla
 git checkout llama-3.1.8b-tensor-parallel-draft
+```
 
-📁 Download and Structure Model Files
-
+### 📁 Download and Structure Model Files
+```
 mkdir -p sw/llama3.1-8B/original
 mkdir -p sw/llama3.1-8B/8B
 
@@ -55,15 +53,17 @@ sw/llama3.1-8B/
 │   └── params.json
 └── original/
     └── tokenizer.model
+```
 
-📦 Install Python Dependencies
-
+### 📦 Install Python Dependencies
+```
 Make sure you're using Python ≥3.10 (tested on 3.12):
 
 pip install -r tests/jax/models/llama/3_1_8b/requirements.txt
+```
 
-▶️ Running the Scripts
-
+### ▶️ Running the Scripts
+```
 You can run any of the available generation scripts using:
 
 python3 tests/jax/models/llama/3_1_8b/generate_jax.py
@@ -79,7 +79,9 @@ python3 tests/jax/models/llama/3_1_8b/generate_jax_unsharded.py
 In generate_hf.py and generate_jax_unsharded.py, there are three example prompts commented in the code that can be modified for testing.
 
 ✅ All three scripts produce identical outputs for the same input prompt (up to floating point precision).
-⚠️ Note on generate_jax.py (Tensor-Parallel Sharded)
+```
+
+### ⚠️ Note on generate_jax.py (Tensor-Parallel Sharded)
 
 When running the sharded JAX model on a 2×4 mesh:
 
