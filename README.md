@@ -119,6 +119,3 @@ When running the sharded JAX model on a 2×4 mesh:
 
 Let me know how I can improve this or whether the memory limit is just a system constraint 🙏
 
-
-You can now paste this directly into your `README.md` file inside your draft PR folder (`tests/jax/models/llama/3_1_8b/README.md`). Let me know if you'd like me to update the file in your current project too.
-
