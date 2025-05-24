@@ -19,8 +19,6 @@ class LLaMA(struct.PyTreeNode):
 
     @partial(jax.jit, static_argnums=(3,4,5))
     def generate(self, tokens: jnp.ndarray, attention_mask: jnp.ndarray, max_gen_len: int, temperature: float = 0.8, top_p: float = 0.95) -> jnp.ndarray:
-        tokens = with_named_sharding_constraint(tokens, self.mesh, P("dp", None))
-        attention_mask = with_named_sharding_constraint(attention_mask, self.mesh, P("dp", None))
 
         generations = self.model.generate(
             input_ids=tokens, 
@@ -38,10 +36,9 @@ class LLaMA(struct.PyTreeNode):
         )
         out_tokens = generations.sequences
         
-        out_tokens = with_named_sharding_constraint(out_tokens, self.mesh, P("dp", None))
         return out_tokens
     
-    def generate_from_str(self, prompts: List[str], max_gen_len: int, temperature: float = 0.8, top_p: float = 0.95):
+    def generate_from_str(self, prompts: List[str], max_gen_len: int, temperature: float = 0.1, top_p: float = 0.99):
         prompt_tokens = [self.tokenizer.encode(x, bos=True, eos=False,  allowed_special="all", disallowed_special=()) for x in prompts]
 
 
@@ -52,14 +49,10 @@ class LLaMA(struct.PyTreeNode):
             tokens = tokens.at[i, -len(t):].set(t) # left pad
         attention_mask = (tokens != self.tokenizer.eos_id).astype(jnp.int32)
 
-        out_tokens = self.generate(tokens, attention_mask, max_gen_len, temperature, top_p)
-
+        out_tokens = self.generate(tokens, attention_mask, max_gen_len, temperature, top_p, do_sample=True)
+        print("safss")
         decoded = []
         #save out tokens in txt file
-        with open("out_tokens.txt", "w") as f:
-            for i, t in enumerate(out_tokens.tolist()):
-                f.write(f"{i}: {t}\n")
-
         for i, t in enumerate(out_tokens.tolist()):
             
             try:
@@ -68,34 +61,7 @@ class LLaMA(struct.PyTreeNode):
                 start_idx = 0  # fallback if BOS not present
             t = t[start_idx:]
 
-
-            #if self.tokenizer.eos_id in t:
-            #    t = t[:t.index(self.tokenizer.eos_id)]
             decoded.append(self.tokenizer.decode(t))
         
-            """
-            for i, t in enumerate(out_tokens.tolist()):
-            # cut to max gen len
-            #t = t[t.index(self.tokenizer.bos_id):]
-            #t = t[:(len(prompt_tokens[i])+max_gen_len)]
-            prompt_len = len(prompt_tokens[i])
-            t = t[prompt_len:]
-            try:
-                start_idx = t.index(self.tokenizer.bos_id)
-            except ValueError:
-                start_idx = 0  # fallback if BOS not present
-            t = t[start_idx:]
-
-            # cut to eos tok if any
-            if self.tokenizer.eos_id in t:
-                t = t[:t.index(self.tokenizer.eos_id)]
-
-            full_decoded = self.tokenizer.decode(t)
-            
-            if full_decoded.startswith(prompts[i]):
-                full_decoded = full_decoded[len(prompts[i]):]
-
-            decoded.append(full_decoded)\
-            """
 
         return decoded

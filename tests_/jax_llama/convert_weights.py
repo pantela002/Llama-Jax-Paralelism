@@ -58,21 +58,6 @@ def convert_llama_weights(ckpt_dir: str, tokenizer: LLaMA3Tokenizer, max_seq_len
         params = json.loads(f.read())
     params.pop("use_scaled_rope", None) 
 
-    import os
-    os.makedirs("raw_torch_weights_txt", exist_ok=True)
-
-    for key in ckpts[0].keys():
-        if "weight" in key and ckpts[0][key].ndim <= 2:
-            tensor = ckpts[0][key].cpu()
-            if tensor.dtype == torch.bfloat16:
-                tensor = tensor.to(dtype=torch.float32)  # safer for serialization
-            np_array = tensor.numpy()
-
-            # Save as .txt
-            with open(f"raw_torch_weights_txt/{key.replace('.', '_')}.txt", "w") as f:
-                f.write(f"{key}: shape={np_array.shape}, dtype={np_array.dtype}\n")
-                f.write(np.array2string(np_array, separator=', ', threshold=10, edgeitems=3))
-                f.write("\n\n")
     jax_weights = {
         'transformer': {
             'wte': {'embedding': np.concatenate([ckpt['tok_embeddings.weight'].type(torch.float16).numpy() for ckpt in ckpts], axis=1)}, 

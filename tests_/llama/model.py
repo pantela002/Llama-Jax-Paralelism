@@ -17,10 +17,7 @@ from torch import nn
 
 import torch.distributed as dist
 from fairscale.nn.model_parallel.initialize import initialize_model_parallel
-if not dist.is_initialized():
-    dist.init_process_group(backend='gloo')  # or 'nccl' for GPU
 
-initialize_model_parallel(1) 
 
 @dataclass
 class ModelArgs:

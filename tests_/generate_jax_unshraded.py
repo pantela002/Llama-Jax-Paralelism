@@ -1,28 +1,32 @@
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
+import os
+import jax
+import jax.numpy as jnp
+import numpy as np
 import fire
+from flax.core.frozen_dict import freeze
+from jax_llama import FlaxLLaMAForCausalLM, convert_llama_weights
+from jax_llama.llama3_tokenizer import Tokenizer as LLaMA3Tokenizer
+from jax_llama.generation import LLaMA  # your class is here
 
-def hf_load(model_id: str = "meta-llama/Meta-Llama-3.1-8B"):
-    print("🔧 Loading Hugging Face model and tokenizer...")
+def jax_load(ckpt_dir: str, tokenizer_path: str, max_seq_length: int = 2048) -> LLaMA:
+    print("🔧 Loading tokenizer and weights...")
+    tokenizer = LLaMA3Tokenizer(tokenizer_path)
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=False)
-    # Print all special tokens and their IDs
-    for token_name in tokenizer.special_tokens_map:
-        token_str = tokenizer.special_tokens_map[token_name]
-        token_id = tokenizer.convert_tokens_to_ids(token_str)
-        print(f"{token_name}: {token_str} -> {token_id}")
-        
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        torch_dtype=torch.float16,
-        device_map="auto",
+    jax_params, jax_config = convert_llama_weights(
+        ckpt_dir=ckpt_dir,
+        tokenizer=tokenizer,
+        max_seq_len=max_seq_length
     )
-    model.eval()
+    jax_params = freeze(jax.tree.map(jnp.asarray, jax_params))
 
-    return tokenizer, model
+    model = FlaxLLaMAForCausalLM(config=jax_config, _do_init=False)
+    llama = LLaMA(params=jax_params, model=model, tokenizer=tokenizer)
+
+    return llama
 
 def main(
-    model_id: str = "meta-llama/Meta-Llama-3.1-8B",
+    ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B",
+    tokenizer_path: str = "/root/tt/sw/llama3.1-8B/original/tokenizer.model",
     prompt: str = (
     "Q: Janet's ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. "
     "She sells the remainder at the farmers' market daily for $2 per fresh duck egg. "
@@ -53,38 +57,21 @@ def main(
     # 60
     # 3
     # 23
-    
-    tokenizer, model = hf_load(model_id)
-    print(tokenizer.eos_token, tokenizer.pad_token)
-    print(tokenizer.special_tokens_map)
 
-    inputs = tokenizer(prompt, return_tensors="pt")
-
-    input_ids = inputs.input_ids.to(model.device)
-    attention_mask = inputs.attention_mask.to(model.device)
-    print("eos_token_id in input_ids:", tokenizer.eos_token_id in input_ids[0])
+    print("🚀 Loading LLaMA...")
+    llama = jax_load(ckpt_dir, tokenizer_path)
 
     print("✍️ Generating...")
-    generation_config = GenerationConfig(
-        do_sample=True,
+    results = llama.generate_from_str(
+        [prompt],
+        max_gen_len=max_gen_len,
         temperature=temperature,
-        top_p=top_p,
-        max_new_tokens=max_gen_len,
-        eos_token_id=tokenizer.eos_token_id,
-        pad_token_id=tokenizer.eos_token_id,
+        top_p=top_p
+
     )
-
-    with torch.no_grad():
-        outputs = model.generate(input_ids,attention_mask=attention_mask, generation_config=generation_config)
-    
-    result = tokenizer.decode(outputs[0], skip_special_tokens=False)
-    if result.startswith("<|begin_of_text|>"):
-        result = result[len("<|begin_of_text|>"):].lstrip()
-
-    if result.startswith(prompt):
-        result = result[len(prompt):].lstrip()
-
-    print("\n🧠 Output:\n", result) 
+    for i, r in enumerate(results):
+        print(f"\n🧾 Prompt {i + 1}: {prompt}")
+        print("🧠 Output:", r)
 
 if __name__ == "__main__":
     fire.Fire(main)

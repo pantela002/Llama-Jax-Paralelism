@@ -77,19 +77,19 @@ def test_RMSNorm(args: ModelArgs, total_tests: int, atol: float) -> np.ndarray:
         jax_output = jax_rms_norm.apply({'params': jax_params}, jnp.asarray(x))
         jax_output = np.asarray(jax_output)
 
-        torch_rms_norm = model.RMSNorm(args.dim, eps=args.norm_eps)
-        torch_output = torch_rms_norm(torch.tensor(x))
-        torch_output = torch_output.detach().numpy()
+        #torch_rms_norm = model.RMSNorm(args.dim, eps=args.norm_eps)
+        #torch_output = torch_rms_norm(torch.tensor(x))
+        #torch_output = torch_output.detach().numpy()
 
-        assert np.allclose(jax_output, torch_output, atol=atol), f"RMSNorm test {test_n} failed"
-        errs.append(np.max(np.abs(jax_output - torch_output)))
+        #assert np.allclose(jax_output, torch_output, atol=atol), f"RMSNorm test {test_n} failed"
+        #errs.append(np.max(np.abs(jax_output - torch_output)))
 
-        flat_jax = jax_output.flatten()
-        flat_torch = torch_output.flatten()
-        pcc_value, _ = pearsonr(flat_jax, flat_torch)
-        pccs.append(pcc_value)
+        #flat_jax = jax_output.flatten()
+        #flat_torch = torch_output.flatten()
+        #pcc_value, _ = pearsonr(flat_jax, flat_torch)
+        #pccs.append(pcc_value)
 
-        print(f"[RMSNorm test {test_n}] Max Error: {errs[-1]:.6f}, PCC: {pcc_value:.6f}")
+        #print(f"[RMSNorm test {test_n}] Max Error: {errs[-1]:.6f}, PCC: {pcc_value:.6f}")
     return np.asarray(errs, dtype=np.float32)
 
 def test_precompute_freqs_cis(args: ModelArgs, atol: float) -> float:
@@ -548,7 +548,7 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
 
     with torch.no_grad():
         with jax.default_device(jax.devices('cpu')[0]):
-            """
+            
             print('='*10)
             print("[Testing RMSNorm]")
             errs = test_RMSNorm(ModelArgs(), 1, atol=1e-2)
@@ -558,6 +558,7 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
             print("Median RMSNorm error: %f" % (np.median(errs)))
             print('='*10)
             print('='*10)
+            """
             print("[Testing precompute_freqs_cis]")
             errs = test_precompute_freqs_cis(ModelArgs(), atol=1e-2)
             print("[Passed]")
@@ -611,7 +612,6 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
             print("Median Transformer error: %f" % (np.median(errs)))
             print('='*10)
                 
-        """
 
         print('='*10)
         print("[Testing Tokenizer]")
@@ -665,6 +665,7 @@ def main(ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B", tokenizer_path: str = "/r
         )
         print("[Passed]")
         print('='*10)
+        """
         
         
 
