@@ -1,49 +1,66 @@
-import os
-os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+
 import jax
 import jax.numpy as jnp
-import numpy as np
 import fire
-from flax.core.frozen_dict import freeze
 from jax_llama import FlaxLLaMAForCausalLM, convert_llama_weights
 from jax_llama.llama3_tokenizer import Tokenizer as LLaMA3Tokenizer
 from jax_llama.generation import LLaMA  # your class is here
-from jax.sharding import Mesh
 from flax.traverse_util import flatten_dict
 import jax.debug
-from jax_llama.partition import get_llama_param_partition_spec
+from jax_llama.config import device_mesh
+from flax.traverse_util import flatten_dict
+from jax.sharding import PartitionSpec as P, NamedSharding
+import flax.nnx as nnx
 
-import gc
+def manually_shard_params(params, mesh):
+    with mesh:
+        for path, value in nnx.items(params):
+            # Only shard 2D weights named 'kernel'
+            if path[-1] == "kernel" and value.ndim >= 2:
+                print(f"✅ Sharding {path} with shape {value.shape}")
+                sharded = jax.device_put(value, NamedSharding(mesh, P(None, "mp")))
+                nnx.set(params, path, sharded)
+            elif path[-1] == "kernel":
+                print(f"⚠️ Skipping {path} with shape {value.shape}")
+    return params
+
 
 def jax_load(ckpt_dir: str, tokenizer_path: str, mesh, max_seq_length: int = 2048) -> LLaMA:
     print("🔧 Loading tokenizer and weights...")
     tokenizer = LLaMA3Tokenizer(tokenizer_path)
 
+    # Convert weights to dict
     params_np, jax_config = convert_llama_weights(
         ckpt_dir=ckpt_dir,
         tokenizer=tokenizer,
-        max_seq_len=max_seq_length
-    )
-    jax_params = freeze(jax.tree.map(jnp.asarray, params_np))
-
-    del params_np
-    gc.collect()    
-
-    param_spec = get_llama_param_partition_spec(jax_params)
-    shard_fn = old_pjit.pjit(
-        lambda x: x,
-        None,
-        param_spec
+        max_seq_len=max_seq_length,
     )
 
-    with mesh:
-        jax_params = shard_fn(jax_params)
-
-
+    # Instantiate model without initializing
     model = FlaxLLaMAForCausalLM(config=jax_config, _do_init=False)
-    llama = LLaMA(params=jax_params, model=model, tokenizer=tokenizer, mesh=mesh)
 
-    return llama
+    # Build an empty state from module structure
+    empty_params = nnx.state_from_module(model.module)
+
+    # Load weights from params_np into empty state
+    for path, _ in nnx.items(empty_params.params):
+        if path in params_np:
+            nnx.set(empty_params.params, path, jnp.asarray(params_np[path]))
+
+    # Manually shard kernel weights under mesh
+    with mesh:
+        for path, value in nnx.items(empty_params.params):
+            if path[-1] == "kernel" and value.ndim >= 2:
+                print(f"✅ Sharding {path} with shape {value.shape}")
+                sharded = jax.device_put(value, NamedSharding(mesh, P(None, "mp")))
+                nnx.set(empty_params.params, path, sharded)
+
+    # Inject the loaded + sharded state
+    model.module.state = empty_params
+
+    # Return wrapped model
+    return LLaMA(params=empty_params.params, model=model, tokenizer=tokenizer, mesh=mesh)
+
 
 def main(
     ckpt_dir: str = "/root/tt/sw/llama3.1-8B/8B",
@@ -62,13 +79,11 @@ def main(
     temperature: float = 0.1,
     top_p: float = 0.99
 ):
-    # Define mesh
-    devices = np.array(jax.devices()).reshape(1, 8)
-    mesh = Mesh(devices, axis_names=(None, "mp"))
-    print("✅ Mesh initialized:", mesh)
+    # print mesh
+    print("✅ Mesh initialized:", device_mesh)
 
     print("🚀 Loading LLaMA...")
-    llama = jax_load(ckpt_dir, tokenizer_path, mesh=mesh)
+    llama = jax_load(ckpt_dir, tokenizer_path, mesh=device_mesh)
 
     print("\n🔍 Visualizing sharded parameter placements (first few):")
     flat_params = flatten_dict(llama.params)
@@ -78,7 +93,7 @@ def main(
 
 
     print("✍️ Generating...")
-    with mesh:
+    with device_mesh:
         results = llama.generate_from_str(
             [prompt],
             max_gen_len=max_gen_len,
