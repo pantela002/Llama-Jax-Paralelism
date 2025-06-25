@@ -17,7 +17,6 @@ class LLaMA(struct.PyTreeNode):
     tokenizer: LLaMA3Tokenizer = struct.field(pytree_node=False)
     mesh: Optional[Mesh] = struct.field(pytree_node=False, default=None)
 
-    @partial(jax.jit, static_argnums=(3,4,5))
     def generate(self, tokens: jnp.ndarray, attention_mask: jnp.ndarray, max_gen_len: int, temperature: float = 0.8, top_p: float = 0.95) -> jnp.ndarray:
         tokens = with_named_sharding_constraint(tokens, self.mesh, P("dp", None))
         attention_mask = with_named_sharding_constraint(attention_mask, self.mesh, P("dp", None))
@@ -52,7 +51,7 @@ class LLaMA(struct.PyTreeNode):
             tokens = tokens.at[i, -len(t):].set(t) # left pad
         attention_mask = (tokens != self.tokenizer.eos_id).astype(jnp.int32)
 
-        out_tokens = self.generate(tokens, attention_mask, max_gen_len, temperature, top_p, do_sample=True)
+        out_tokens = self.generate(tokens, attention_mask, max_gen_len, temperature, top_p)
         print("safss")
         decoded = []
         #save out tokens in txt file

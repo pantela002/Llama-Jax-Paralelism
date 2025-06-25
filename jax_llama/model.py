@@ -1,20 +1,24 @@
 from functools import partial
 from typing import Optional, Tuple, Union
 
-import flax.linen as nn
-import jax
-import jax.numpy as jnp
-import numpy as np
-from flax.core.frozen_dict import FrozenDict, freeze, unfreeze
-from flax.linen import combine_masks, make_causal_mask
-from flax.linen.attention import dot_product_attention_weights
-from flax.traverse_util import flatten_dict, unflatten_dict
-from jax import lax
-from flax.linen import partitioning as nn_partitioning
+import flax.linen as nn # type: ignore
+import jax # type: ignore
+import jax.numpy as jnp # type: ignore
+import numpy as np # type: ignore
+from flax.core.frozen_dict import FrozenDict, freeze, unfreeze # type: ignore
+from flax.linen import combine_masks, make_causal_mask # type: ignore
+from flax.linen.attention import dot_product_attention_weights # type: ignore
+from flax.traverse_util import flatten_dict, unflatten_dict # type: ignore
+from jax import lax # type: ignore
+from flax.linen import partitioning as nn_partitioning # type: ignore
+from jax.sharding import Mesh, PartitionSpec as P # type: ignore
+from jax import debug # type: ignore
+from jax.sharding import Mesh, PartitionSpec # type: ignore
+from jax.experimental.shard_map import shard_map # type: ignore
 
-from transformers.modeling_flax_outputs import FlaxBaseModelOutput, FlaxCausalLMOutput
-from transformers.modeling_flax_utils import ACT2FN, FlaxPreTrainedModel, append_call_sample_docstring
-from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging
+from transformers.modeling_flax_outputs import FlaxBaseModelOutput, FlaxCausalLMOutput # type: ignore
+from transformers.modeling_flax_utils import ACT2FN, FlaxPreTrainedModel, append_call_sample_docstring # type: ignore
+from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging # type: ignore
 
 from jax_llama.config import LLaMAConfig
 import math
@@ -198,7 +202,7 @@ class FlaxLLaMAAttention(nn.Module):
         xv = self._split_heads(xv, self.num_key_value_heads)
 
         freqs_cis = jnp.take(self.freqs_cis, position_ids, axis=0)
-        np.savetxt("freqs_cis.txt", freqs_cis.reshape(-1, self.head_dim), fmt='%.6f')
+        #np.savetxt("freqs_cis.txt", freqs_cis.reshape(-1, self.head_dim), fmt='%.6f')
 
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis, dtype=self.dtype)
 
@@ -257,6 +261,50 @@ class FlaxLLaMAAttention(nn.Module):
         
         outputs = (attn_output, attn_weights) if output_attentions else (attn_output,)
         return outputs
+  
+  
+
+devices = jax.devices()
+print("Devices:", devices)
+mesh = Mesh(devices, axis_names=('mp',))
+
+
+class ParallelDense(nn.Module):
+    features: int
+    dtype: jnp.dtype = jnp.float32
+    param_dtype: jnp.dtype = jnp.float32
+
+    @nn.compact
+    def __call__(self, x):
+        in_dim = x.shape[-1]
+        out_dim = self.features
+        local_shape = (in_dim, out_dim)
+        
+        
+        kernel = self.param("kernel", nn.initializers.lecun_normal(), local_shape, self.param_dtype)
+
+        
+        def matmul_fn(x, k):
+            axis_idx = jax.lax.axis_index("mp")
+            debug.print("🔧 Device {}/{} running matmul: x.shape = {}, kernel.shape = {}", 
+                        axis_idx, mesh.shape['mp'], x.shape, k.shape)
+            
+            local_out = jnp.einsum('bsd,df->bsf', x, k)
+
+            full_out = jax.lax.all_gather(local_out, axis_name="mp", axis=0)
+
+            return jnp.reshape(jnp.transpose(full_out, (1, 2, 0, 3)), (x.shape[0], x.shape[1], -1))
+
+
+        # Note: we replicate x, shard only kernel
+        return shard_map(
+            matmul_fn,
+            mesh=mesh,
+            in_specs=(None, P(None, "mp")),     # x is replicated, kernel is sharded on output dim
+            out_specs=P(None),            # output is sharded along output dim
+            check_rep=False
+        )(x, kernel)
+
         
 class FlaxLLaMAMLP(nn.Module):
     config: LLaMAConfig
@@ -267,36 +315,28 @@ class FlaxLLaMAMLP(nn.Module):
     def setup(self) -> None:
         config = self.config
 
-        self.w1 = nn.Dense(
-            config.intermediate_size, 
-            dtype=self.dtype, 
-            param_dtype=self.param_dtype, 
-            use_bias=False, 
-            kernel_init=jax.nn.initializers.normal(self.config.initializer_range), 
-            precision=self.precision, 
+        self.w1 = ParallelDense(
+            config.intermediate_size,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
         )
-        self.w2 = nn.Dense(
-            config.hidden_size, 
-            dtype=self.dtype, 
-            param_dtype=self.param_dtype, 
-            use_bias=False, 
-            kernel_init=jax.nn.initializers.normal(self.config.initializer_range), 
-            precision=self.precision, 
+        self.w2 = ParallelDense(
+            config.hidden_size,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
         )
-        self.w3 = nn.Dense(
-            config.intermediate_size, 
-            dtype=self.dtype, 
-            param_dtype=self.param_dtype, 
-            use_bias=False, 
-            kernel_init=jax.nn.initializers.normal(self.config.initializer_range), 
-            precision=self.precision, 
+        self.w3 = ParallelDense(
+            config.intermediate_size,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
         )
-        self.dropout = nn.Dropout(rate=self.config.resid_pdrop)
 
     def __call__(self, x: jnp.ndarray, deterministic: bool = True) -> jnp.ndarray:
+        print("1")
         x = self.w2(nn.silu(self.w1(x)) * self.w3(x))
-        x = self.dropout(x, deterministic=deterministic)
         return x
+
+
 
 class FlaxLLaMABlock(nn.Module):
     config: LLaMAConfig
@@ -381,6 +421,7 @@ class FlaxLLaMAPreTrainedModel(FlaxPreTrainedModel):
         super().__init__(config, module, input_shape=input_shape, seed=seed, dtype=dtype, _do_init=_do_init)
 
     def init_weights(self, rng: jax.random.PRNGKey, input_shape: Tuple, params: FrozenDict = None) -> FrozenDict:
+        print("Initializing weights for FlaxLLaMAPreTrainedModel... SEEEEEEEEEE KORISTI")
         # init input tensors
         input_ids = jnp.zeros(input_shape, dtype="i4")
         attention_mask = jnp.ones_like(input_ids)
@@ -623,14 +664,6 @@ class FlaxLLaMAModule(nn.Module):
 class FlaxLLaMAModel(FlaxLLaMAPreTrainedModel):
     module_class = FlaxLLaMAModule
 
-# append_call_sample_docstring(
-#     FlaxLLaMAModel,
-#     _TOKENIZER_FOR_DOC,
-#     _CHECKPOINT_FOR_DOC,
-#     FlaxCausalLMOutput,
-#     _CONFIG_FOR_DOC,
-# )
-
 class FlaxLLaMAForCausalLMModule(nn.Module):
     config: LLaMAConfig
     dtype: jnp.dtype = jnp.float32
@@ -689,6 +722,7 @@ class FlaxLLaMAForCausalLM(FlaxLLaMAPreTrainedModel):
     module_class = FlaxLLaMAForCausalLMModule
 
     def prepare_inputs_for_generation(self, input_ids, max_length, attention_mask: Optional[jnp.ndarray] = None):
+        print("Preparing inputs for generation... SEEEEEE KORISTIIIIIIIIIIIIIIIIIIIIIIIIIIIIII")
         # initializing the cache
         batch_size, seq_length = input_ids.shape
 
@@ -710,14 +744,8 @@ class FlaxLLaMAForCausalLM(FlaxLLaMAPreTrainedModel):
         }
 
     def update_inputs_for_generation(self, model_outputs, model_kwargs):
+        print("Updating inputs for generation... SEEEEEE KORISTIIIIIIIIIIIIIIIIIIIIIIIIIIIIII")
         model_kwargs["past_key_values"] = model_outputs.past_key_values
         model_kwargs["position_ids"] = model_kwargs["position_ids"][:, -1:] + 1
         return model_kwargs
 
-# append_call_sample_docstring(
-#     FlaxGPTJForCausalLM,
-#     _TOKENIZER_FOR_DOC,
-#     _CHECKPOINT_FOR_DOC,
-#     FlaxCausalLMOutput,
-#     _CONFIG_FOR_DOC,
-# )

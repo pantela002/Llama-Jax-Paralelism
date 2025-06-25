@@ -1,22 +1,22 @@
-import torch
-import jax
-import jax.numpy as jnp
-import numpy as np
-from flax.core import freeze, unfreeze
-from scipy.stats import pearsonr
+import torch # type: ignore
+import jax  # type: ignore
+import jax.numpy as jnp # type: ignore
+import numpy as np # type: ignore
+from flax.core import freeze, unfreeze # type: ignore
+from scipy.stats import pearsonr # type: ignore
 
-from jax.sharding import Mesh, PartitionSpec
+from jax.sharding import Mesh, PartitionSpec # type: ignore
 
-from flax.core import freeze, unfreeze
-from transformers.models.llama.modeling_llama import LlamaAttention 
+from flax.core import freeze, unfreeze # type: ignore
+from transformers.models.llama.modeling_llama import LlamaAttention  # type: ignore
 from pathlib import Path
-from flax.linen import make_causal_mask
+from flax.linen import make_causal_mask # type: ignore
 from jax_llama import hf_model
 from jax_llama.model import FlaxLLaMAAttention  # adjust if your path differs
 from typing import Optional, Tuple
 import os
-import torch.distributed as dist
-import fairscale.nn.model_parallel.initialize as fs_init
+import torch.distributed as dist # type: ignore
+import fairscale.nn.model_parallel.initialize as fs_init # type: ignore
 from jax_llama import config
 
 # Only initialize once
@@ -94,7 +94,7 @@ def test_hf_attention(args, ckpt_dir: str,x, layer_idx: int = 0, atol: float = 1
         "wo.weight": torch.tensor(weights["wo"]),
     })
     freqs_cis = hf_model.precompute_freqs_cis(args.dim // args.n_heads, args.max_seq_len)
-    np.savetxt("freqs_cis_hf.txt", freqs_cis.reshape(-1, args.dim // args.n_heads), fmt='%.6f')
+    #np.savetxt("freqs_cis_hf.txt", freqs_cis.reshape(-1, args.dim // args.n_heads), fmt='%.6f')
 
     torch_output = torch_attn(
         torch.tensor(x), 
@@ -136,7 +136,7 @@ def test_jax_attention(args, ckpt_dir: str,x, layer_idx: int = 0, atol: float = 
         
     print("JAX output shape:", jax_output.shape)
     # Save to txt
-    np.savetxt("jax_attention_output.txt", jax_out.reshape(-1, args.dim), fmt='%.6f')
+    #np.savetxt("jax_attention_output.txt", jax_out.reshape(-1, args.dim), fmt='%.6f')
     return jax_out
     
     
@@ -144,10 +144,10 @@ def test_jax_attention(args, ckpt_dir: str,x, layer_idx: int = 0, atol: float = 
     
 x = np.random.randn(ModelArgs().max_batch_size, ModelArgs().max_seq_len, ModelArgs().dim).astype(np.float32)
 
-p1 =test_hf_attention(ModelArgs(), "/root/tt/3_1_8b/llama3.1-8B/8B",x, layer_idx=0)
+p1 =test_hf_attention(ModelArgs(), "/root/tt/3_1_8b/Llama-Jax-Paralelism/llama3.1-8B/8B",x, layer_idx=0)
 
 
-p2 =test_jax_attention(ModelArgs(), "/root/tt/3_1_8b/llama3.1-8B/8B",x, layer_idx=0)
+p2 =test_jax_attention(ModelArgs(), "/root/tt/3_1_8b/Llama-Jax-Paralelism/llama3.1-8B/8B",x, layer_idx=0)
 # correlation
 corr, _ = pearsonr(p1.flatten(), p2.flatten())
 print(f"Pearson correlation: {corr:.4f}")
