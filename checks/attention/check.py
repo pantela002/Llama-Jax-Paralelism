@@ -1,3 +1,5 @@
+import os
+os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
 import torch # type: ignore
 import jax  # type: ignore
 import jax.numpy as jnp # type: ignore
@@ -18,6 +20,9 @@ import os
 import torch.distributed as dist # type: ignore
 import fairscale.nn.model_parallel.initialize as fs_init # type: ignore
 from jax_llama import config
+# Setup mesh (manual tensor parallelism over 'mp' axis)
+devices = jax.devices()
+mesh = Mesh(devices, axis_names=('mp',))
 
 # Only initialize once
 if not dist.is_initialized():
@@ -115,8 +120,28 @@ def test_jax_attention(args, ckpt_dir: str,x, layer_idx: int = 0, atol: float = 
     # Generate dummy input
     # Load Meta weights
     weights = load_attention_weights(ckpt_dir, layer_idx)
+    flax_attn = FlaxLLaMAAttention(args.transformers_config(), precision='highest')
+    dummy_vars = flax_attn.init(
+        jax.random.PRNGKey(0),
+        jnp.asarray(x),
+        attention_mask=jnp.ones((args.max_batch_size, args.max_seq_len), dtype=jnp.int32),
+        position_ids=jnp.broadcast_to(
+            jnp.arange(args.max_seq_len, dtype=jnp.int32)[None, :],
+            (args.max_batch_size, args.max_seq_len)
+        )
+    )
+    params_unfrozen = unfreeze(dummy_vars)
+    params_unfrozen["params"]["wq"]["kernel"] = jnp.asarray(weights["wq"].T)
+    params_unfrozen["params"]["wk"]["kernel"] = jnp.asarray(weights["wk"].T)
+    params_unfrozen["params"]["wv"]["kernel"] = jnp.asarray(weights["wv"].T)
+    params_unfrozen["params"]["wo"]["kernel"] = jnp.asarray(weights["wo"].T)
+    flax_params = freeze(params_unfrozen)
+    attention_mask = jnp.ones((args.max_batch_size, args.max_seq_len), dtype=jnp.int32)
+    position_ids = jnp.broadcast_to(
+        jnp.arange(args.max_seq_len, dtype=jnp.int32)[None, :],
+        (args.max_batch_size, args.max_seq_len)
+    )
     
-    # Format weights for Flax
     jax_params = freeze({
         "wq": {"kernel": jnp.asarray(weights["wq"].T)},
         "wk": {"kernel": jnp.asarray(weights["wk"].T)},
@@ -124,22 +149,19 @@ def test_jax_attention(args, ckpt_dir: str,x, layer_idx: int = 0, atol: float = 
         "wo": {"kernel": jnp.asarray(weights["wo"].T)},
     })
 
-    # Prepare attention mask and position ids
-    jax_attention = FlaxLLaMAAttention(args.transformers_config(), precision='highest')
-    jax_output = jax_attention.apply(
-        {'params': jax_params}, 
-        jnp.asarray(x), 
-        jnp.ones((args.max_batch_size, args.max_seq_len), dtype=np.int32), 
-        jnp.broadcast_to(jnp.arange(args.max_seq_len, dtype=np.int32)[None, :], (args.max_batch_size, args.max_seq_len)), 
-    )[0]
-    jax_out = np.asarray(jax_output)
+    with mesh:
+        jax_output = flax_attn.apply(
+            flax_params,
+            jnp.asarray(x),
+            attention_mask,
+            position_ids,
+            deterministic=True
+        )[0]
         
-    print("JAX output shape:", jax_output.shape)
-    # Save to txt
-    #np.savetxt("jax_attention_output.txt", jax_out.reshape(-1, args.dim), fmt='%.6f')
+    jax_out = np.asarray(jax_output)
+    print("✅ JAX output shape:", jax_out.shape)
     return jax_out
-    
-    
+
     
     
 x = np.random.randn(ModelArgs().max_batch_size, ModelArgs().max_seq_len, ModelArgs().dim).astype(np.float32)

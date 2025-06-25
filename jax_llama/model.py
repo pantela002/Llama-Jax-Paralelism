@@ -105,37 +105,60 @@ class FlaxLLaMAAttention(nn.Module):
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
 
-        self.wq = nn.Dense(
-            config.num_attention_heads*self.head_dim, 
-            dtype=self.dtype, 
-            param_dtype=self.param_dtype, 
-            use_bias=False, 
-            kernel_init=jax.nn.initializers.normal(self.config.initializer_range), 
-            precision=self.precision, 
+        #self.wq = nn.Dense(
+        #    config.num_attention_heads*self.head_dim, 
+        #    dtype=self.dtype, 
+        #    param_dtype=self.param_dtype, 
+        #    use_bias=False, 
+        #    kernel_init=jax.nn.initializers.normal(self.config.initializer_range), 
+        #    precision=self.precision, 
+        #)
+        #self.wk = nn.Dense(
+        #    config.num_key_value_heads*self.head_dim, 
+        #    dtype=self.dtype, 
+        #    param_dtype=self.param_dtype, 
+        #    use_bias=False, 
+        #    kernel_init=jax.nn.initializers.normal(self.config.initializer_range), 
+        #    precision=self.precision, 
+        #)
+        #self.wv = nn.Dense(
+        #    config.num_key_value_heads*self.head_dim, 
+        #    dtype=self.dtype, 
+        #    param_dtype=self.param_dtype, 
+        #    use_bias=False, 
+        #    kernel_init=jax.nn.initializers.normal(self.config.initializer_range), 
+        #    precision=self.precision, 
+        #)
+        #self.wo = nn.Dense(
+        #    config.hidden_size, 
+        #    dtype=self.dtype, 
+        #    param_dtype=self.param_dtype, 
+        #    use_bias=False, 
+        #    kernel_init=jax.nn.initializers.normal(self.config.initializer_range), 
+        #    precision=self.precision, 
+        #)
+        self.wq = ParallelDense(
+            config.num_attention_heads * self.head_dim,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
         )
-        self.wk = nn.Dense(
-            config.num_key_value_heads*self.head_dim, 
-            dtype=self.dtype, 
-            param_dtype=self.param_dtype, 
-            use_bias=False, 
-            kernel_init=jax.nn.initializers.normal(self.config.initializer_range), 
-            precision=self.precision, 
+
+        self.wk = ParallelDense(
+            config.num_key_value_heads * self.head_dim,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
         )
-        self.wv = nn.Dense(
-            config.num_key_value_heads*self.head_dim, 
-            dtype=self.dtype, 
-            param_dtype=self.param_dtype, 
-            use_bias=False, 
-            kernel_init=jax.nn.initializers.normal(self.config.initializer_range), 
-            precision=self.precision, 
+
+        self.wv = ParallelDense(
+            config.num_key_value_heads * self.head_dim,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
         )
-        self.wo = nn.Dense(
-            config.hidden_size, 
-            dtype=self.dtype, 
-            param_dtype=self.param_dtype, 
-            use_bias=False, 
-            kernel_init=jax.nn.initializers.normal(self.config.initializer_range), 
-            precision=self.precision, 
+
+        self.wo = ParallelDense(
+            config.hidden_size,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
         )
 
         self.resid_dropout = nn.Dropout(rate=config.resid_pdrop)

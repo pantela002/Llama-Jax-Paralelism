@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
 import fire
@@ -76,7 +77,7 @@ def main(
 
     with torch.no_grad():
         outputs = model.generate(input_ids,attention_mask=attention_mask, generation_config=generation_config)
-    
+    np.savetxt("out_tokens_hf.txt", outputs.cpu().numpy(), fmt="%s")
     result = tokenizer.decode(outputs[0], skip_special_tokens=False)
     if result.startswith("<|begin_of_text|>"):
         result = result[len("<|begin_of_text|>"):].lstrip()

@@ -106,8 +106,8 @@ def test_jax_mlp(args: ModelArgs, ckpt_dir: str, x: np.ndarray, layer_idx: int =
     params_unfrozen["params"]["w3"]["kernel"] = jnp.asarray(weights["w3"].T)
     jax_params = freeze(params_unfrozen)
     print("JAX MLP params:", jax.tree.map(lambda x: x.shape, jax_params))
-    with mesh:
-        jax_out = jax_mlp.apply(jax_params, jnp.asarray(x), deterministic=True)  
+    #with mesh:
+    jax_out = jax_mlp.apply(jax_params, jnp.asarray(x), deterministic=True)  
     print("Sharding spec:", jax.tree.map(lambda x: getattr(x, 'sharding', 'none'), jax_out))
     print("JAX MLP output shape:", jax_out.shape)
     return np.asarray(jax_out)
@@ -122,6 +122,5 @@ if __name__ == "__main__":
     jax_out = test_jax_mlp(args, "/root/tt/3_1_8b/Llama-Jax-Paralelism/llama3.1-8B/8B", x, layer_idx=0)
 
     corr, _ = pearsonr(jax_out.flatten(), torch_out.flatten())
-    np.savetxt("jax_out.txt", jax_out.flatten())
-    np.savetxt("torch_out.txt", torch_out.flatten())
+
     print(f"Pearson correlation: {corr:.6f}")

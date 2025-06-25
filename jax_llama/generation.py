@@ -1,4 +1,5 @@
 import jax
+import numpy as np
 import jax.numpy as jnp
 from jax_llama import FlaxLLaMAForCausalLM
 from jax_llama.llama3_tokenizer import Tokenizer as LLaMA3Tokenizer
@@ -10,6 +11,7 @@ from jaxtyping import PyTree
 from flax import struct
 from functools import partial
 from typing import List, Optional, Union
+import gc
 
 class LLaMA(struct.PyTreeNode):
     params: PyTree
@@ -18,9 +20,9 @@ class LLaMA(struct.PyTreeNode):
     mesh: Optional[Mesh] = struct.field(pytree_node=False, default=None)
 
     def generate(self, tokens: jnp.ndarray, attention_mask: jnp.ndarray, max_gen_len: int, temperature: float = 0.8, top_p: float = 0.95) -> jnp.ndarray:
-        tokens = with_named_sharding_constraint(tokens, self.mesh, P("dp", None))
-        attention_mask = with_named_sharding_constraint(attention_mask, self.mesh, P("dp", None))
-
+        tokens = with_named_sharding_constraint(tokens, self.mesh, P(None))  # replicate input
+        attention_mask = with_named_sharding_constraint(attention_mask, self.mesh, P(None))
+        print("DJE PUCA")
         generations = self.model.generate(
             input_ids=tokens, 
             attention_mask=attention_mask, 
@@ -35,9 +37,10 @@ class LLaMA(struct.PyTreeNode):
                 top_p=top_p
             )
         )
+        print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAa")
         out_tokens = generations.sequences
+        print("here1")
         
-        out_tokens = with_named_sharding_constraint(out_tokens, self.mesh, P("dp", None))
         return out_tokens
     
     def generate_from_str(self, prompts: List[str], max_gen_len: int, temperature: float = 0.1, top_p: float = 0.99):
@@ -50,9 +53,31 @@ class LLaMA(struct.PyTreeNode):
         for i, t in enumerate(prompt_tokens):
             tokens = tokens.at[i, -len(t):].set(t) # left pad
         attention_mask = (tokens != self.tokenizer.eos_id).astype(jnp.int32)
-
+        print("after this it gets killed")
+        
         out_tokens = self.generate(tokens, attention_mask, max_gen_len, temperature, top_p)
-        print("safss")
+        return out_tokens
+        #print("out_tokens shape:", out_tokens.shape)
+        #out_tokens.block_until_ready()
+        print("✅ Generation completed without crash.")
+        # 🧠 Materialize to CPU in chunks (if needed)
+        del tokens
+        del attention_mask
+        del prompt_tokens
+        del self.model
+        del self.params
+        gc.collect()
+
+        out_tokens_cpu = jax.device_get(out_tokens)
+        print("🧠 Output (first 5 tokens):", out_tokens_cpu[0][:5])
+        print(out_tokens[0])
+
+
+        # ✍️ Save to file (make sure it's small)
+        print("💾 Saving to file...")
+        np.savetxt("out_tokens_jax.txt", out_tokens_cpu, fmt="%s")
+
+    
         decoded = []
         #save out tokens in txt file
         for i, t in enumerate(out_tokens.tolist()):
