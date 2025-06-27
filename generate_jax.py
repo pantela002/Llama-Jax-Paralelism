@@ -11,7 +11,6 @@ from jax_llama.generation import LLaMA  # your class is here
 from jax.sharding import Mesh
 from flax.traverse_util import flatten_dict
 import jax.debug
-from jax_llama.partition import get_llama_param_partition_spec
 from jax.experimental import pjit as old_pjit
 import gc
 
@@ -31,20 +30,22 @@ def jax_load(ckpt_dir: str, tokenizer_path: str, mesh, max_seq_length: int = 204
 
     model = FlaxLLaMAForCausalLM(config=jax_config, _do_init=False)
     llama = LLaMA(params=jax_params, model=model, tokenizer=tokenizer, mesh=mesh)
-
+    del jax_params
+    gc.collect()
     return llama
 
 def main(
     ckpt_dir: str = "/root/tt/3_1_8b/Llama-Jax-Paralelism/llama3.1-8B/8B",
     tokenizer_path: str = "/root/tt/3_1_8b/Llama-Jax-Paralelism/llama3.1-8B/original/tokenizer.model",
-    prompt: str = (
-
-    "Q: A robe takes 2 bolts of blue fiber and half that much white fiber. How many bolts in total does it take?\n"
-    "A:"
-),
-    max_gen_len: int = 1,
-    temperature: float = 0.1,
-    top_p: float = 0.99
+    prompt = (
+        "Q: A bumper car rink has 12 red cars. They have 2 fewer green cars than they have red cars. "
+        "They have 3 times the number of blue cars as they have green cars. The rink also has yellow cars. "
+        "If the rink has 75 cars in total how many yellow cars do they have?\n"
+        "A:"
+    ),
+    max_gen_len: int = 64,
+    temperature: float = 1,
+    top_p: float = 1
 ):
     # Define mesh
     devices = jax.devices()
@@ -53,10 +54,6 @@ def main(
 
     print("🚀 Loading LLaMA...")
     llama = jax_load(ckpt_dir, tokenizer_path, mesh=mesh)
-
-    print("\n🔍 Visualizing sharded parameter placements (first few):")
-    flat_params = flatten_dict(llama.params)
-
 
     print("✍️ Generating...")
     with mesh:
@@ -69,7 +66,7 @@ def main(
     del llama
     gc.collect()
     print("✅ Generation complete.")
-    print(results)
+    np.savetxt("output_jax.txt", results, fmt="%d")
     #for i, r in enumerate(results):
     #    print(f"\n🧾 Prompt {i + 1}: {prompt}")
     #    print("🧠 Output:", r)

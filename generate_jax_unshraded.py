@@ -21,31 +21,21 @@ def jax_load(ckpt_dir: str, tokenizer_path: str, max_seq_length: int = 2048) -> 
 
     model = FlaxLLaMAForCausalLM(config=jax_config, _do_init=False)
     llama = LLaMA(params=jax_params, model=model, tokenizer=tokenizer)
-
+    
     return llama
 
 def main(
     ckpt_dir: str = "/root/tt/3_1_8b/Llama-Jax-Paralelism/llama3.1-8B/8B",
     tokenizer_path: str = "/root/tt/3_1_8b/Llama-Jax-Paralelism/llama3.1-8B/original/tokenizer.model",
-    prompt: str = (
-    "Q: Janet's ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. "
-    "She sells the remainder at the farmers' market daily for $2 per fresh duck egg. "
-    "How much in dollars does she make every day at the farmers' market?\n"
-    "A: Janet sells 16 - 3 - 4 = <<16-3-4=9>>9 duck eggs a day.\n"
-    "She makes 9 * 2 = $<<9*2=18>>18 every day at the farmer's market.\n"
-    "F: #### 18 \n\n"
-    "Q: Josh decides to try flipping a house. He buys a house for $80,000 and then puts in $50,000 in repairs. This increased the value of the house by 150%. How much profit did he make?\n"
-    "A: The cost of the house and repairs came out to 80,000 + 50,000 = $<<80000+50000=130000>>130,000\n"
-    "He increased the value of the house by 80,000 * 1.5 = <<80000*1.5=120000>>120,000\n"
-    "So the new value of the house is 120,000 + 80,000 = $<<120000+80000=200000>>200,000\n"
-    "So he made a profit of 200,000 - 130,000 = $<<200000-130000=70000>>70,000\n"
-    "F: #### 70000\n\n"
-    "Q: A bumper car rink has 12 red cars. They have 2 fewer green cars than they have red cars. They have 3 times the number of blue cars as they have green cars. The rink also has yellow cars.  If the rink has 75 cars in total how many yellow cars do they have?\n"
-    "A:"
-),
-    max_gen_len: int = 16,
-    temperature: float = 0.01,
-    top_p: float = 0.99
+    prompt = (
+        "Q: A bumper car rink has 12 red cars. They have 2 fewer green cars than they have red cars. "
+        "They have 3 times the number of blue cars as they have green cars. The rink also has yellow cars. "
+        "If the rink has 75 cars in total how many yellow cars do they have?\n"
+        "A:"
+    ),
+    max_gen_len: int = 64,
+    temperature: float = 0.001,
+    top_p: float = 1
 ):
     
     #example prompts
@@ -69,9 +59,6 @@ def main(
         top_p=top_p
 
     )
-    for i, r in enumerate(results):
-        print(f"\n🧾 Prompt {i + 1}: {prompt}")
-        print("🧠 Output:", r)
-
+    np.savetxt("out_tokens_jax_unsharded.txt", results, fmt="%d")
 if __name__ == "__main__":
     fire.Fire(main)

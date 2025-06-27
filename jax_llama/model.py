@@ -309,8 +309,8 @@ class ParallelDense(nn.Module):
         
         def matmul_fn(x, k):
             axis_idx = jax.lax.axis_index("mp")
-            debug.print("🔧 Device {}/{} running matmul: x.shape = {}, kernel.shape = {}", 
-                        axis_idx, mesh.shape['mp'], x.shape, k.shape)
+            #debug.print("🔧 Device {}/{} running matmul: x.shape = {}, kernel.shape = {}", 
+                        #axis_idx, mesh.shape['mp'], x.shape, k.shape)
             
             local_out = jnp.einsum('bsd,df->bsf', x, k)
 
@@ -355,7 +355,6 @@ class FlaxLLaMAMLP(nn.Module):
         )
 
     def __call__(self, x: jnp.ndarray, deterministic: bool = True) -> jnp.ndarray:
-        print("1")
         x = self.w2(nn.silu(self.w1(x)) * self.w3(x))
         return x
 

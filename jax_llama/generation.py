@@ -5,7 +5,6 @@ from jax_llama import FlaxLLaMAForCausalLM
 from jax_llama.llama3_tokenizer import Tokenizer as LLaMA3Tokenizer
 from transformers.generation import GenerationConfig
 from jax.sharding import Mesh
-from jax_llama.partition import with_named_sharding_constraint
 from jax.sharding import PartitionSpec as P
 from jaxtyping import PyTree
 from flax import struct
@@ -20,8 +19,7 @@ class LLaMA(struct.PyTreeNode):
     mesh: Optional[Mesh] = struct.field(pytree_node=False, default=None)
 
     def generate(self, tokens: jnp.ndarray, attention_mask: jnp.ndarray, max_gen_len: int, temperature: float = 0.8, top_p: float = 0.95) -> jnp.ndarray:
-        tokens = with_named_sharding_constraint(tokens, self.mesh, P(None))  # replicate input
-        attention_mask = with_named_sharding_constraint(attention_mask, self.mesh, P(None))
+
         print("DJE PUCA")
         generations = self.model.generate(
             input_ids=tokens, 

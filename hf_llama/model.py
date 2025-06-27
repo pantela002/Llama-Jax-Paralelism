@@ -1,10 +1,10 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # This software may be used and distributed in accordance with the terms of the Llama 3 Community License Agreement.
-import os
+
 import math
 from dataclasses import dataclass
 from typing import Optional, Tuple
-import numpy as np
+
 import fairscale.nn.model_parallel.initialize as fs_init
 import torch
 import torch.nn.functional as F
@@ -15,25 +15,21 @@ from fairscale.nn.model_parallel.layers import (
 )
 from torch import nn
 
-import torch.distributed as dist
-from fairscale.nn.model_parallel.initialize import initialize_model_parallel
-
-if torch.distributed.is_available() and not torch.distributed.is_initialized() and "RANK" in os.environ:
-    dist.init_process_group(backend='gloo')
 
 @dataclass
 class ModelArgs:
-    dim: int = 4096 #4096
+    dim: int = 4096
     n_layers: int = 32
     n_heads: int = 32
-    n_kv_heads: int = 8
-    vocab_size: int = 128256 # -1
-    multiple_of: int = 1024  # make SwiGLU hidden layer size multiple of large power of 2
+    n_kv_heads: Optional[int] = None
+    vocab_size: int = -1
+    multiple_of: int = 256  # make SwiGLU hidden layer size multiple of large power of 2
     ffn_dim_multiplier: Optional[float] = None
     norm_eps: float = 1e-5
-    rope_theta: float = 500000.0
-    max_batch_size: int = 1
-    max_seq_len: int = 2048 #2048
+    rope_theta: float = 500000
+
+    max_batch_size: int = 32
+    max_seq_len: int = 2048
 
 
 class RMSNorm(torch.nn.Module):
@@ -50,10 +46,9 @@ class RMSNorm(torch.nn.Module):
         return output * self.weight
 
 
-def precompute_freqs_cis(dim: int, end: int, theta: float = 500000.0):
+def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-    np.savetxt("freqs_hf.txt", freqs, fmt="%.9f")
-    t = torch.arange(end, device=freqs.device, dtype=torch.float64)
+    t = torch.arange(end, device=freqs.device, dtype=torch.float32)
     freqs = torch.outer(t, freqs)
     freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
     return freqs_cis
@@ -138,7 +133,7 @@ class Attention(nn.Module):
                 self.n_local_kv_heads,
                 self.head_dim,
             )
-        ).to(torch.device("cpu")) #.cuda()
+        ).to("cuda" if torch.cuda.is_available() else "cpu")
         self.cache_v = torch.zeros(
             (
                 args.max_batch_size,
@@ -146,7 +141,7 @@ class Attention(nn.Module):
                 self.n_local_kv_heads,
                 self.head_dim,
             )
-        ).to(torch.device("cpu"))  #.cuda()
+        ).to("cuda" if torch.cuda.is_available() else "cpu")
 
     def forward(
         self,

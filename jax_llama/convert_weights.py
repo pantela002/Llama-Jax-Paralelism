@@ -18,13 +18,13 @@ class ModelArgs:
     n_heads: int = 32
     n_kv_heads: Optional[int] = 8
     vocab_size: int = -1  # defined later by tokenizer
-    multiple_of: int = 256  # make SwiGLU hidden layer size multiple of large power of 2
-    ffn_dim_multiplier: Optional[float] = None
+    multiple_of: int = 1024  # make SwiGLU hidden layer size multiple of large power of 2
+    ffn_dim_multiplier: Optional[float] = 1.3
     norm_eps: float = 1e-5
     rope_theta: float = 500000.0
 
     max_batch_size: int = 1
-    max_seq_len: int = 128
+    max_seq_len: int = 256
 
 def config_from_params(args: ModelArgs) -> LLaMAConfig:
     intermediate_size = int(2 * (args.dim * 4) / 3)
